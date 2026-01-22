@@ -1,0 +1,21 @@
+[
+  {
+    "arguments": [
+      "/home/song/toolchains/arm-gcc-15/bin/aarch64-none-elf-gcc",
+      "-I../../kernel/.",
+      "-I../../kernel/include",
+      "-I../../kernel/patch/include",
+      "-I../../kernel/linux/include",
+      "-I../../kernel/linux/arch/arm64/include",
+      "-I../../kernel/linux/tools/arch/arm64/include",
+      "-c",
+      "-O2",
+      "-o",
+      "inject-hide.o",
+      "inject-hide.c"
+    ],
+    "directory": "/home/song/Github/KernelPatch/kpms/inject-hide",
+    "file": "/home/song/Github/KernelPatch/kpms/inject-hide/inject-hide.c",
+    "output": "/home/song/Github/KernelPatch/kpms/inject-hide/inject-hide.o"
+  }
+]

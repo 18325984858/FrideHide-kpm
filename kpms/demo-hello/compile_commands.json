@@ -1,0 +1,22 @@
+[
+  {
+    "arguments": [
+      "/home/song/toolchains/arm-gcc-15/bin/aarch64-none-elf-gcc",
+      "-I../../kernel/.",
+      "-I../../kernel/include",
+      "-I../../kernel/patch/include",
+      "-I../../kernel/linux/include",
+      "-I../../kernel/linux/arch/arm64/include",
+      "-I../../kernel/linux/tools/arch/arm64/include",
+      "-Thello.lds",
+      "-c",
+      "-O2",
+      "-o",
+      "hello.o",
+      "hello.c"
+    ],
+    "directory": "/home/song/Github/KernelPatch/kpms/demo-hello",
+    "file": "/home/song/Github/KernelPatch/kpms/demo-hello/hello.c",
+    "output": "/home/song/Github/KernelPatch/kpms/demo-hello/hello.o"
+  }
+]
