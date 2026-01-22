@@ -17,5 +17,82 @@
     "directory": "/home/song/Github/KernelPatch/kpms/inject-hide",
     "file": "/home/song/Github/KernelPatch/kpms/inject-hide/inject-hide.c",
     "output": "/home/song/Github/KernelPatch/kpms/inject-hide/inject-hide.o"
+  },
+  {
+    "arguments": [
+      "/home/song/toolchains/arm-gcc-15/bin/aarch64-none-elf-gcc",
+      "-I../../kernel/.",
+      "-I../../kernel/include",
+      "-I../../kernel/patch/include",
+      "-I../../kernel/linux/include",
+      "-I../../kernel/linux/arch/arm64/include",
+      "-I../../kernel/linux/tools/arch/arm64/include",
+      "-c",
+      "-O2",
+      "-o",
+      "Frid/FridHide.o",
+      "Frid/FridHide.c"
+    ],
+    "directory": "/home/song/Github/KernelPatch/kpms/inject-hide",
+    "file": "/home/song/Github/KernelPatch/kpms/inject-hide/Frid/FridHide.c",
+    "output": "/home/song/Github/KernelPatch/kpms/inject-hide/Frid/FridHide.o"
+  },
+  {
+    "arguments": [
+      "/home/song/toolchains/arm-gcc-15/bin/aarch64-none-elf-gcc",
+      "-I../../kernel/.",
+      "-I../../kernel/include",
+      "-I../../kernel/patch/include",
+      "-I../../kernel/linux/include",
+      "-I../../kernel/linux/arch/arm64/include",
+      "-I../../kernel/linux/tools/arch/arm64/include",
+      "-c",
+      "-O2",
+      "-o",
+      "Config/Log.o",
+      "Config/Log.c"
+
+    ],
+    "directory": "/home/song/Github/KernelPatch/kpms/inject-hide",
+    "file": "/home/song/Github/KernelPatch/kpms/inject-hide/Config/Log.c",
+    "output": "/home/song/Github/KernelPatch/kpms/inject-hide/Config/Log.o"
+  },
+  {
+    "arguments": [
+      "/home/song/toolchains/arm-gcc-15/bin/aarch64-none-elf-gcc",
+      "-I../../kernel/.",
+      "-I../../kernel/include",
+      "-I../../kernel/patch/include",
+      "-I../../kernel/linux/include",
+      "-I../../kernel/linux/arch/arm64/include",
+      "-I../../kernel/linux/tools/arch/arm64/include",
+      "-c",
+      "-O2",
+      "-o",
+      "Config/Config.o",
+      "Config/Config.c"
+    ],
+    "directory": "/home/song/Github/KernelPatch/kpms/inject-hide",
+    "file": "/home/song/Github/KernelPatch/kpms/inject-hide/Config/Config.c",
+    "output": "/home/song/Github/KernelPatch/kpms/inject-hide/Config/Config.o"
+  },
+  {
+    "arguments": [
+      "/home/song/toolchains/arm-gcc-15/bin/aarch64-none-elf-gcc",
+      "-I../../kernel/.",
+      "-I../../kernel/include",
+      "-I../../kernel/patch/include",
+      "-I../../kernel/linux/include",
+      "-I../../kernel/linux/arch/arm64/include",
+      "-I../../kernel/linux/tools/arch/arm64/include",
+      "-c",
+      "-O2",
+      "-o",
+      "Debug/Debug.o",
+      "Debug/Debug.c"
+    ],
+    "directory": "/home/song/Github/KernelPatch/kpms/inject-hide",
+    "file": "/home/song/Github/KernelPatch/kpms/inject-hide/Debug/Debug.c",
+    "output": "/home/song/Github/KernelPatch/kpms/inject-hide/Debug/Debug.o"
   }
 ]

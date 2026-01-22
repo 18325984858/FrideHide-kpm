@@ -16,7 +16,7 @@ INCLUDE_DIRS := . include patch/include linux/include linux/arch/arm64/include l
 
 INCLUDE_FLAGS := $(foreach dir,$(INCLUDE_DIRS),-I$(KP_DIR)/kernel/$(dir))
 
-objs := inject-hide.o
+objs := inject-hide.o Frid/FridHide.o Config/Log.o Config/Config.o Debug/Debug.o
 
 all: inject-hide.kpm
 
@@ -33,12 +33,21 @@ clean:
 
 
 
-# 定义手机上的目标路径
-# 注意：Android 16 建议先推送到 /sdcard/Download 以便修改 SELinux 标签
 REMOTE_PATH := /sdcard/Download
 TARGET_NAME := inject-hide.kpm
 
-.PHONY: push
+.PHONY: push clean-remote
+
 push: all
-	@echo "📤 正在推送 $(TARGET) 到设备..."
+	@echo "📤 正在推送 $(TARGET_NAME) 到设备..."
 	adb push $(TARGET_NAME) $(REMOTE_PATH)/$(TARGET_NAME)
+
+# 新增：删除远程目录下的目标文件
+clean-remote:
+	@echo "🗑️  正在删除设备上的 $(TARGET_NAME)..."
+	adb shell rm -f $(REMOTE_PATH)/$(TARGET_NAME)
+
+	# 新增：删除远程目录下的所有文件 (危险操作，请确认路径)
+clean-all-remote:
+	@echo "🔥 正在清空设备目录: $(REMOTE_PATH) ..."
+	adb shell "rm -rf $(REMOTE_PATH)/*"
