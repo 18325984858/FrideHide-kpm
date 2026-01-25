@@ -2,14 +2,26 @@
 #include "../Config/Log.h"
 #include <linux/string.h>
 
+void *show_map_vma = 0;
+
 void frida_hide_install(void)
 {
-    klog("[SFK] frida_hide_install");
+    klog("frida_hide_install");
+
+
+    show_map_vma = (void *) kallsyms_lookup_name("show_map_vma");
+    if (show_map_vma) {
+
+        klog("show_map_vma address: %llx", show_map_vma);
+
+        int err = hook_wrap2(show_map_vma, before_show_map_vma, after_show_map_vma, NULL);
+    }
+
 }
 
 void frida_hide_uninstall(void)
 {
-    klog("[SFK] frida_hide_uninstall");
+    klog("frida_hide_uninstall");
 }
 
 // 内核环境下的 memmem 实现
@@ -45,13 +57,14 @@ static int is_hiden_module(struct seq_file *m)
     return 0;
 }
 
-/*
+
 void before_show_map_vma(hook_fargs2_t *args, void *udata)
 {
     struct seq_file *m = (struct seq_file *)args->arg0;
     args->local.data0 = 0;
-    if (m && m->buf) {
-        // 记录 seq_file 中的count，在 after hook 中设置 count 为记录值
+
+    // 严谨检查：不仅看 m，还要看 m->buf 是否真的有地址
+    if (m && (unsigned long)m->buf > 0xffffff0000000000) { 
         args->local.data0 = m->count;
     } 
 }
@@ -59,11 +72,12 @@ void before_show_map_vma(hook_fargs2_t *args, void *udata)
 void after_show_map_vma(hook_fargs2_t *args, void *udata)
 {
     struct seq_file *m = (struct seq_file *)args->arg0;
-    if (m && m->buf) {
-        if (args->local.data0 && is_hiden_module(m)) {  // is_hiden_module 查找 frida-agent 等字符串
-            pr_info("inject-hide: maps hide -> frida-agent \n");
-            m->count = args->local.data0;  // 恢复原来的 count 值
+    // 只有在 before 记录了合法的 data0 时才操作
+    if (m && args->local.data0 < m->count && (unsigned long)m->buf > 0xffffff0000000000) {
+        if (is_hiden_module(m)) {
+             // 只有匹配时才打日志
+             klog("inject-hide: matched and hiding!");
+             m->count = (size_t)args->local.data0;
         }
     }
 }
-    */
