@@ -17,3 +17,6 @@
 *.elf
 
 *.kpm
+
+# Clangd cache
+.cache/

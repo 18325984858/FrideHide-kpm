@@ -2,16 +2,21 @@
 #define CSTRUCT_H
 
 
-
 typedef struct seq_file {
 	char *buf;
-	unsigned int size;
-	unsigned int from;
-	unsigned int count;
-	unsigned int pad_until;
+	unsigned long size;
+	unsigned long from;
+	unsigned long count;
+	unsigned long pad_until;
 	long long index;
 	long long read_pos;
-}seq_file;
+};
 
+struct sockaddr_in {
+    short sin_family;
+    unsigned short sin_port;     
+    unsigned int sin_addr;     
+    char sin_zero[8];
+};
 
 #endif //CSTRUCT_H

@@ -3,6 +3,7 @@
 #include <common.h>
 #include <kputils.h>
 #include <linux/string.h>
+#include <linux/kernel.h>
 
 #include "Frid/FridHide.h"
 #include "Config/Log.h"
@@ -20,7 +21,73 @@ KPM_LICENSE("GPL v2");
 KPM_AUTHOR("SFK");
 
 ///< The description.
-KPM_DESCRIPTION("inject-hide: init test");
+KPM_DESCRIPTION("inject-hide: hide injected so modules from maps/smaps/openat/faccessat");
+
+/**
+ * =============================================================================
+ *  inject-hide KPM control0 用法说明 (Usage)
+ * =============================================================================
+ *
+ *  通过 KPM control0 接口发送命令字符串 (args) 控制模块行为:
+ *
+ *  1. 文件级隐藏开关:
+ *     - "enable_file_hide"       启用文件级隐藏 (openat/faccessat 拦截)
+ *     - "disable_file_hide"      禁用文件级隐藏
+ *
+ *  2. 自定义隐藏 SO 列表管理 (支持指定多个要隐藏的 SO 模块):
+ *     - "add_hide_so:<name>"     添加一个要隐藏的 SO 关键词
+ *       示例: "add_hide_so:libexample.so"
+ *              "add_hide_so:myinject"
+ *       可多次调用添加多个, 最多支持 32 个
+ *
+ *     - "add_hide_so:<n1>,<n2>,<n3>"  一次添加多个, 用英文逗号分隔
+ *       示例: "add_hide_so:libfoo.so,libbar.so,libbaz.so"
+ *
+ *     - "remove_hide_so:<name>"  移除一个已添加的隐藏关键词
+ *       示例: "remove_hide_so:libexample.so"
+ *
+ *     - "list_hide_so"           列出当前所有自定义隐藏的 SO 关键词
+ *
+ *     - "clear_hide_so"          清空所有自定义隐藏的 SO 关键词
+ *
+ *  3. 其它字符串: echo 回显
+ *
+ *  用法示例 (shell):
+ *    # 添加自定义隐藏 SO
+ *    kpatch ctl kpm-inject-hide "add_hide_so:libexample.so"
+ *    kpatch ctl kpm-inject-hide "add_hide_so:libfoo.so,libbar.so"
+ *
+ *    # 查看当前隐藏列表
+ *    kpatch ctl kpm-inject-hide "list_hide_so"
+ *
+ *    # 移除指定 SO
+ *    kpatch ctl kpm-inject-hide "remove_hide_so:libexample.so"
+ *
+ *    # 清空全部自定义隐藏
+ *    kpatch ctl kpm-inject-hide "clear_hide_so"
+ *
+ *    # 启用文件级隐藏
+ *    kpatch ctl kpm-inject-hide "enable_file_hide"
+ *
+ * =============================================================================
+ */
+
+/*
+
+通过 APatch UI 使用
+点击模块卡片上的 「参数」 按钮，在弹出的输入框中填写以下命令字符串：
+
+输入内容	功能
+add_hide_so:libexample.so	添加一个要隐藏的 SO
+add_hide_so:libfoo.so,libbar.so	一次添加多个（逗号分隔）
+list_hide_so	查看当前隐藏列表
+remove_hide_so:libexample.so	移除指定 SO
+clear_hide_so	清空全部自定义隐藏
+enable_file_hide	启用文件级隐藏（openat/faccessat）
+disable_file_hide	禁用文件级隐藏
+每次点「参数」只能发送一条命令，模块会返回执行结果显示在界面上。
+
+*/
 
 
 /**
@@ -45,6 +112,84 @@ static long inject_hide_init(const char *args, const char *event, void *__user r
 static long inject_hide_control0(const char *args, char *__user out_msg, int outlen)
 {
     klog("inject-hide control0, args: %s", args);
+
+    if (args) {
+        // 文件级隐藏开关
+        if (strncmp(args, "enable_file_hide", 16) == 0) {
+            dobby_hide_set_file_hide(1);
+            char msg[] = "file_hide enabled";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        } else if (strncmp(args, "disable_file_hide", 17) == 0) {
+            dobby_hide_set_file_hide(0);
+            char msg[] = "file_hide disabled";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+
+        // 添加自定义隐藏 SO (支持逗号分隔多个)
+        if (strncmp(args, "add_hide_so:", 12) == 0) {
+            const char *names = args + 12;
+            char buf[HIDE_SO_NAME_LEN];
+            char result[256] = "";
+            int added = 0, failed = 0;
+
+            while (*names) {
+                const char *comma = names;
+                while (*comma && *comma != ',') comma++;
+                int len = comma - names;
+                if (len > 0 && len < HIDE_SO_NAME_LEN) {
+                    memcpy(buf, names, len);
+                    buf[len] = '\0';
+                    if (hide_so_add(buf) == 0) {
+                        added++;
+                    } else {
+                        failed++;
+                    }
+                }
+                names = *comma ? comma + 1 : comma;
+            }
+
+            snprintf(result, sizeof(result), "added: %d, failed: %d, total: %d", added, failed, hide_so_count());
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+
+        // 移除自定义隐藏 SO
+        if (strncmp(args, "remove_hide_so:", 15) == 0) {
+            const char *name = args + 15;
+            int ret = hide_so_remove(name);
+            char result[128];
+            if (ret == 0) {
+                snprintf(result, sizeof(result), "removed '%s', total: %d", name, hide_so_count());
+            } else {
+                snprintf(result, sizeof(result), "remove failed: '%s' not found", name);
+            }
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+
+        // 列出所有自定义隐藏 SO
+        if (strncmp(args, "list_hide_so", 12) == 0) {
+            char list_buf[1024];
+            int count = hide_so_count();
+            int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
+            if (count > 0) {
+                hide_so_dump(list_buf + offset, sizeof(list_buf) - offset);
+            }
+            compat_copy_to_user(out_msg, list_buf, strlen(list_buf) + 1);
+            return 0;
+        }
+
+        // 清空所有自定义隐藏 SO
+        if (strncmp(args, "clear_hide_so", 13) == 0) {
+            hide_so_clear();
+            char msg[] = "all custom hide_so cleared";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+    }
+
     char echo[64] = "echo: ";
     strncat(echo, args, 48);
     compat_copy_to_user(out_msg, echo, sizeof(echo));
