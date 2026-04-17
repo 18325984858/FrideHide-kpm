@@ -1,3 +1,19 @@
+/*
+ * @file   inject-hide.c
+ * @brief  inject-hide KPM 入口与 control0 命令分发器。
+ *
+ * 三大隐藏能力：
+ *   - proc_hide  : /proc/<pid> getdents64 过滤 + openat/faccessat 拦截
+ *   - file_hide  : 按 custom_hide_so[] 关键字隐藏 .so 路径和 maps 条目
+ *   - comm_hide  : 按 custom_hide_comm[] 关键字擦写 task->comm
+ *
+ * 另有三份运行时可增删的列表：hide_pid / hide_so / hide_pkg / hide_comm；
+ * 包名命中后会在 __get_task_comm hook 里自动把对应 tgid 登记进 hide_pid。
+ *
+ * 所有操作都通过 control0 字符串命令发起，上层由 InjectHideCtl
+ * (app/src/main/cpp/ReadProcessMemory/inject_hide_ctl.cpp) 通过
+ * SUPERCALL_KPM_CONTROL 投递到这里。
+ */
 #include <compiler.h>
 #include <kpmodule.h>
 #include <common.h>
@@ -186,6 +202,189 @@ static long inject_hide_control0(const char *args, char *__user out_msg, int out
             hide_so_clear();
             char msg[] = "all custom hide_so cleared";
             compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+
+        // ───── 包名级隐藏列表 (hide_pkg) ─────
+        // add_hide_pkg:<name>[,<name>...]
+        if (strncmp(args, "add_hide_pkg:", 13) == 0) {
+            const char *names = args + 13;
+            char buf[HIDE_PKG_NAME_LEN];
+            char result[256] = "";
+            int added = 0, failed = 0;
+            while (*names) {
+                const char *comma = names;
+                while (*comma && *comma != ',') comma++;
+                int len = comma - names;
+                if (len > 0 && len < HIDE_PKG_NAME_LEN) {
+                    memcpy(buf, names, len);
+                    buf[len] = '\0';
+                    if (hide_pkg_add(buf) == 0) added++; else failed++;
+                }
+                names = *comma ? comma + 1 : comma;
+            }
+            snprintf(result, sizeof(result), "added: %d, failed: %d, total: %d",
+                     added, failed, hide_pkg_count());
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+        if (strncmp(args, "remove_hide_pkg:", 16) == 0) {
+            const char *name = args + 16;
+            int ret = hide_pkg_remove(name);
+            char result[160];
+            if (ret == 0)
+                snprintf(result, sizeof(result), "removed '%s', total: %d", name, hide_pkg_count());
+            else
+                snprintf(result, sizeof(result), "remove failed: '%s' not found", name);
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+        if (strncmp(args, "list_hide_pkg", 13) == 0) {
+            char list_buf[1024];
+            int count = hide_pkg_count();
+            int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
+            if (count > 0) hide_pkg_dump(list_buf + offset, sizeof(list_buf) - offset);
+            compat_copy_to_user(out_msg, list_buf, strlen(list_buf) + 1);
+            return 0;
+        }
+        if (strncmp(args, "clear_hide_pkg", 14) == 0) {
+            hide_pkg_clear();
+            char msg[] = "all hide_pkg cleared";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+
+        // ───── 线程名 (comm) 隐藏列表 (hide_comm) ─────
+        // add_hide_comm:<name>[,<name>...]
+        if (strncmp(args, "add_hide_comm:", 14) == 0) {
+            const char *names = args + 14;
+            char buf[HIDE_COMM_NAME_LEN];
+            char result[256] = "";
+            int added = 0, failed = 0;
+            while (*names) {
+                const char *comma = names;
+                while (*comma && *comma != ',') comma++;
+                int len = comma - names;
+                if (len > 0 && len < HIDE_COMM_NAME_LEN) {
+                    memcpy(buf, names, len);
+                    buf[len] = '\0';
+                    if (hide_comm_add(buf) == 0) added++; else failed++;
+                }
+                names = *comma ? comma + 1 : comma;
+            }
+            snprintf(result, sizeof(result), "added: %d, failed: %d, total: %d",
+                     added, failed, hide_comm_count());
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+        if (strncmp(args, "remove_hide_comm:", 17) == 0) {
+            const char *name = args + 17;
+            int ret = hide_comm_remove(name);
+            char result[160];
+            if (ret == 0)
+                snprintf(result, sizeof(result), "removed '%s', total: %d", name, hide_comm_count());
+            else
+                snprintf(result, sizeof(result), "remove failed: '%s' not found", name);
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+        if (strncmp(args, "list_hide_comm", 14) == 0) {
+            char list_buf[1024];
+            int count = hide_comm_count();
+            int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
+            if (count > 0) hide_comm_dump(list_buf + offset, sizeof(list_buf) - offset);
+            compat_copy_to_user(out_msg, list_buf, strlen(list_buf) + 1);
+            return 0;
+        }
+        if (strncmp(args, "clear_hide_comm", 15) == 0) {
+            hide_comm_clear();
+            char msg[] = "all hide_comm cleared";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+        if (strncmp(args, "enable_comm_hide", 16) == 0) {
+            comm_hide_set(1);
+            char msg[] = "comm_hide enabled";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+        if (strncmp(args, "disable_comm_hide", 17) == 0) {
+            comm_hide_set(0);
+            char msg[] = "comm_hide disabled";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+
+        // ───── PID 级隐藏（针对 /proc/<pid>/mem 读取方反检测）─────
+        if (strncmp(args, "enable_proc_hide", 16) == 0) {
+            proc_hide_set(1);
+            char msg[] = "proc_hide enabled";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+        if (strncmp(args, "disable_proc_hide", 17) == 0) {
+            proc_hide_set(0);
+            char msg[] = "proc_hide disabled";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+        if (strncmp(args, "add_hide_pid:", 13) == 0) {
+            const char *p = args + 13;
+            int added = 0, failed = 0;
+            while (*p) {
+                int v = 0, has = 0;
+                while (*p == ' ' || *p == ',') p++;
+                while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; has = 1; }
+                if (has) { if (hide_pid_add(v) == 0) added++; else failed++; }
+                if (*p && *p != ',' && *p != ' ') break;
+            }
+            char result[128];
+            snprintf(result, sizeof(result), "added: %d, failed: %d, total: %d",
+                     added, failed, hide_pid_count());
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+        if (strncmp(args, "remove_hide_pid:", 16) == 0) {
+            const char *p = args + 16;
+            int v = 0;
+            while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; }
+            char result[96];
+            if (v > 0 && hide_pid_remove(v) == 0)
+                snprintf(result, sizeof(result), "removed pid %d, total: %d", v, hide_pid_count());
+            else
+                snprintf(result, sizeof(result), "remove failed: pid %d not found", v);
+            compat_copy_to_user(out_msg, result, strlen(result) + 1);
+            return 0;
+        }
+        if (strncmp(args, "list_hide_pid", 13) == 0) {
+            char list_buf[256];
+            int count = hide_pid_count();
+            int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
+            if (count > 0) hide_pid_dump(list_buf + offset, sizeof(list_buf) - offset);
+            compat_copy_to_user(out_msg, list_buf, strlen(list_buf) + 1);
+            return 0;
+        }
+        if (strncmp(args, "clear_hide_pid", 14) == 0) {
+            hide_pid_clear();
+            char msg[] = "all hide_pid cleared";
+            compat_copy_to_user(out_msg, msg, sizeof(msg));
+            return 0;
+        }
+
+        // ───── 状态查询 ─────
+        // 返回当前 inject-hide 各功能开关与列表统计，供前端 UI 刷新显示。
+        // 输出格式 (固定字段, 便于解析):
+        //   proc_hide=<0/1>
+        //   file_hide=<0/1>
+        //   hide_pid_count=<N>
+        //   hide_so_count=<N>
+        if (strncmp(args, "status", 6) == 0) {
+            char status[192];
+            snprintf(status, sizeof(status),
+                     "proc_hide=%d\nfile_hide=%d\ncomm_hide=%d\nhide_pid_count=%d\nhide_so_count=%d\nhide_pkg_count=%d\nhide_comm_count=%d\n",
+                     proc_hide_enabled, file_hide_enabled, comm_hide_enabled,
+                     hide_pid_count(), hide_so_count(), hide_pkg_count(), hide_comm_count());
+            compat_copy_to_user(out_msg, status, strlen(status) + 1);
             return 0;
         }
     }
