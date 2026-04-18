@@ -137,19 +137,18 @@ void frida_hide_install(void)
     // 默认监控的包名（可随后通过 control0: add_hide_pkg / remove_hide_pkg 调整）
     hide_pkg_add("com.example.dobbyproject");
 
-    // 默认隐藏的 SO 关键词（可随后通过 control0: add_hide_so / remove_hide_so 调整）
+    // 默认隐藏的 SO 关键词（仅文件/maps 路径中真实存在的子串；
+    // 纯线程名请放到下面的 hide_comm 列表，不要混进 hide_so）
     hide_so_add("libdobbyproject");
     hide_so_add("libdobby");
     hide_so_add("dobby");
     hide_so_add("frida-agent");
     hide_so_add("frida");
-    hide_so_add("gum-js-loop");
-    hide_so_add("GumJS");
-    hide_so_add("gmain");
 
     // 默认隐藏的线程名 (comm) 关键词（可随后通过 control0 调整）
     hide_comm_add("gmain");
     hide_comm_add("gum-js-loop");
+    hide_comm_add("GumJS");
     hide_comm_add("gdbus");
     hide_comm_add("pool-frida");
     hide_comm_add("linjector");
