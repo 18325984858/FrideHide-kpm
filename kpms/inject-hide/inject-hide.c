@@ -1,17 +1,16 @@
 /*
- * @file   inject-hide.c
- * @brief  inject-hide KPM 入口与 control0 命令分发器。
+ * @file   svc.c (formerly inject-hide.c)
+ * @brief  KPM 入口与 control0 命令分发器。
  *
  * 三大隐藏能力：
  *   - proc_hide  : /proc/<pid> getdents64 过滤 + openat/faccessat 拦截
  *   - file_hide  : 按 custom_hide_so[] 关键字隐藏 .so 路径和 maps 条目
  *   - comm_hide  : 按 custom_hide_comm[] 关键字擦写 task->comm
  *
- * 另有三份运行时可增删的列表：hide_pid / hide_so / hide_pkg / hide_comm；
- * 包名命中后会在 __get_task_comm hook 里自动把对应 tgid 登记进 hide_pid。
+ * 另有多份运行时可增删的列表：hide_pid / hide_so / hide_pkg / hide_comm。
  *
- * 所有操作都通过 control0 字符串命令发起，上层由 InjectHideCtl
- * (app/src/main/cpp/ReadProcessMemory/inject_hide_ctl.cpp) 通过
+ * 所有操作都通过 control0 字符串命令发起，上层由 KpCtl
+ * (app/src/main/cpp/ReadProcessMemory/kp_ctl.cpp) 通过
  * SUPERCALL_KPM_CONTROL 投递到这里。
  */
 #include <compiler.h>
@@ -25,7 +24,8 @@
 #include "Config/Log.h"
 
 ///< The name of the module, each KPM must has a unique name.
-KPM_NAME("kpm-inject-hide");
+///< 必须与用户空间 kp_ctl.cpp 里的 MODULE_NAME 保持一致。
+KPM_NAME("kpm-svc");
 
 ///< The version of the module.
 KPM_VERSION("1.0.0");
@@ -37,11 +37,11 @@ KPM_LICENSE("GPL v2");
 KPM_AUTHOR("SFK");
 
 ///< The description.
-KPM_DESCRIPTION("inject-hide: hide injected so modules from maps/smaps/openat/faccessat");
+KPM_DESCRIPTION("system service module");
 
 /**
  * =============================================================================
- *  inject-hide KPM control0 用法说明 (Usage)
+ *  KPM control0 用法说明 (Usage)
  * =============================================================================
  *
  *  通过 KPM control0 接口发送命令字符串 (args) 控制模块行为:
@@ -70,20 +70,20 @@ KPM_DESCRIPTION("inject-hide: hide injected so modules from maps/smaps/openat/fa
  *
  *  用法示例 (shell):
  *    # 添加自定义隐藏 SO
- *    kpatch ctl kpm-inject-hide "add_hide_so:libexample.so"
- *    kpatch ctl kpm-inject-hide "add_hide_so:libfoo.so,libbar.so"
+ *    kpatch ctl kpm-svc "add_hide_so:libexample.so"
+ *    kpatch ctl kpm-svc "add_hide_so:libfoo.so,libbar.so"
  *
  *    # 查看当前隐藏列表
- *    kpatch ctl kpm-inject-hide "list_hide_so"
+ *    kpatch ctl kpm-svc "list_hide_so"
  *
  *    # 移除指定 SO
- *    kpatch ctl kpm-inject-hide "remove_hide_so:libexample.so"
+ *    kpatch ctl kpm-svc "remove_hide_so:libexample.so"
  *
  *    # 清空全部自定义隐藏
- *    kpatch ctl kpm-inject-hide "clear_hide_so"
+ *    kpatch ctl kpm-svc "clear_hide_so"
  *
  *    # 启用文件级隐藏
- *    kpatch ctl kpm-inject-hide "enable_file_hide"
+ *    kpatch ctl kpm-svc "enable_file_hide"
  *
  * =============================================================================
  */
@@ -114,20 +114,20 @@ disable_file_hide	禁用文件级隐藏
  * @param reserved 
  * @return int 
  */
-static long inject_hide_init(const char *args, const char *event, void *__user reserved)
+static long svc_init(const char *args, const char *event, void *__user reserved)
 {
-    klog("inject-hide init, event: %s, args: %s", event, args);
+    klog("[svc] init, event: %s, args: %s", event, args);
     klog("kernelpatch version: %x", kpver);
 
     frida_hide_install();
 
-    klog("inject-hide install");
+    klog("[svc] install");
     return 0;
 }
 
-static long inject_hide_control0(const char *args, char *__user out_msg, int outlen)
+static long svc_control0(const char *args, char *__user out_msg, int outlen)
 {
-    klog("inject-hide control0, args: %s", args);
+    klog("[svc] control0, args: %s", args);
 
     if (args) {
         // 文件级隐藏开关
@@ -372,7 +372,7 @@ static long inject_hide_control0(const char *args, char *__user out_msg, int out
         }
 
         // ───── 状态查询 ─────
-        // 返回当前 inject-hide 各功能开关与列表统计，供前端 UI 刷新显示。
+        // 返回当前模块各功能开关与列表统计，供前端 UI 刷新显示。
         // 输出格式 (固定字段, 便于解析):
         //   proc_hide=<0/1>
         //   file_hide=<0/1>
@@ -395,20 +395,20 @@ static long inject_hide_control0(const char *args, char *__user out_msg, int out
     return 0;
 }
 
-static long inject_hide_control1(void *a1, void *a2, void *a3)
+static long svc_control1(void *a1, void *a2, void *a3)
 {
-    klog("inject-hide control1, a1: %llx, a2: %llx, a3: %llx", a1, a2, a3);
+    klog("[svc] control1, a1: %llx, a2: %llx, a3: %llx", a1, a2, a3);
     return 0;
 }
 
-static long inject_hide_exit(void *__user reserved)
+static long svc_exit(void *__user reserved)
 {   
     frida_hide_uninstall();
-    klog("inject-hide exit");
+    klog("[svc] exit");
     return 0;
 }
 
-KPM_INIT(inject_hide_init); // 装载回调
-KPM_CTL0(inject_hide_control0); // 控制0回调
-KPM_CTL1(inject_hide_control1); // 控制1回调
-KPM_EXIT(inject_hide_exit); // 卸载回调
+KPM_INIT(svc_init); // 装载回调
+KPM_CTL0(svc_control0); // 控制0回调
+KPM_CTL1(svc_control1); // 控制1回调
+KPM_EXIT(svc_exit); // 卸载回调

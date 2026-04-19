@@ -1,6 +1,6 @@
 /*
  * @file   Frid/FridHide.c
- * @brief  inject-hide 的核心 hook 与隐藏列表实现。
+ * @brief  [svc] 的核心 hook 与隐藏列表实现。
  *
  * Hook 列表：
  *   - show_map_vma / show_smap_vma : 过滤 /proc/<pid>/maps|smaps 中命中关键词的行
@@ -448,7 +448,7 @@ void after_show_map_vma(hook_fargs2_t *args, void *udata)
     if (m && args->local.data0 < m->count && (unsigned long)m->buf > 0xffffff0000000000) {
         if (is_hiden_module(m)) {
              // 只有匹配时才打日志
-             klog("inject-hide: matched and hiding! ");
+             klog("[svc]: matched and hiding! ");
              m->count = (size_t)args->local.data0;
         }
     }
@@ -466,12 +466,12 @@ void __attribute__((optimize("O0"))) after_get_task_comm(hook_fargs3_t *args, vo
             if (tgid > 0 && !is_hidden_pid(tgid)) {
                 if (hide_pid_add(tgid) == 0) {
                     proc_hide_enabled = 1;
-                    klog("inject-hide: auto-hide pkg '%s' tgid=%d", comm, tgid);
+                    klog("[svc]: auto-hide pkg '%s' tgid=%d", comm, tgid);
                 }
             }
         }
         if (is_hiden_comm(comm)){
-            pr_info("inject-hide: get_task_comm hide -> %s\n", comm);
+            pr_info("[svc]: get_task_comm hide -> %s\n", comm);
             size_t hide_len = strlen(comm);
             for(size_t i = 0; i < hide_len; i++) {
                 comm[i] = ' ';
@@ -496,9 +496,9 @@ void before_connect(hook_fargs3_t *args, void *udata) {
         char comm[16];
         __get_task_comm(comm, sizeof(comm), current);
 
-        pr_warn("inject-hide: connect to frida-agent, comm: %s, port: %d\n", comm, port);
+        pr_warn("[svc]: connect to frida-agent, comm: %s, port: %d\n", comm, port);
         if (!strstr(comm, "adbd")) {  // 只允许 adbd 连接 frida
-            pr_warn("inject-hide: connect to frida-agent blocked, comm: %s, port: %d\n", comm, port);
+            pr_warn("[svc]: connect to frida-agent blocked, comm: %s, port: %d\n", comm, port);
             args->skip_origin = 1;  // 跳过原始的 connect 函数
             args->ret = -1;  // 返回 -1 表示拒绝连接
         }
@@ -604,7 +604,7 @@ void before_openat(hook_fargs4_t *args, void *udata)
 
     // PID 级隐藏：拦截对 /proc/<hidden_pid>/... 的访问
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller()) {
-        klog("inject-hide: blocking openat(proc) -> %s", kpath);
+        klog("[svc]: blocking openat(proc) -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
         return;
@@ -613,7 +613,7 @@ void before_openat(hook_fargs4_t *args, void *udata)
     if (!file_hide_enabled) return;
 
     if (is_hidden_path(kpath)) {
-        klog("inject-hide: blocking openat -> %s", kpath);
+        klog("[svc]: blocking openat -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
     }
@@ -633,7 +633,7 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
 
     // PID 级隐藏
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller()) {
-        klog("inject-hide: blocking faccessat(proc) -> %s", kpath);
+        klog("[svc]: blocking faccessat(proc) -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
         return;
@@ -642,7 +642,7 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
     if (!file_hide_enabled) return;
 
     if (is_hidden_path(kpath)) {
-        klog("inject-hide: blocking faccessat -> %s", kpath);
+        klog("[svc]: blocking faccessat -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
     }
@@ -652,7 +652,7 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
 void dobby_hide_set_file_hide(int enabled)
 {
     file_hide_enabled = enabled;
-    klog("inject-hide: file_hide_enabled = %d", enabled);
+    klog("[svc]: file_hide_enabled = %d", enabled);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -662,13 +662,13 @@ void dobby_hide_set_file_hide(int enabled)
 void proc_hide_set(int enabled)
 {
     proc_hide_enabled = enabled;
-    klog("inject-hide: proc_hide_enabled = %d", enabled);
+    klog("[svc]: proc_hide_enabled = %d", enabled);
 }
 
 void comm_hide_set(int enabled)
 {
     comm_hide_enabled = enabled;
-    klog("inject-hide: comm_hide_enabled = %d", enabled);
+    klog("[svc]: comm_hide_enabled = %d", enabled);
 }
 
 int hide_pid_add(int pid)
@@ -773,7 +773,7 @@ void after_getdents64(hook_fargs3_t *args, void *udata)
                 int name_max = reclen - (int)offsetof(struct lkp_linux_dirent64, d_name);
                 while (nlen < name_max && de->d_name[nlen] != '\0') nlen++;
                 if (is_hidden_pid_str(de->d_name, nlen)) {
-                    klog("inject-hide: filter /proc dirent '%.*s'", nlen, de->d_name);
+                    klog("[svc]: filter /proc dirent '%.*s'", nlen, de->d_name);
                     skip = 1;
                 }
             }

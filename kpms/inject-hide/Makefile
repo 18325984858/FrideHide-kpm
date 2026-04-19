@@ -18,13 +18,13 @@ INCLUDE_FLAGS := $(foreach dir,$(INCLUDE_DIRS),-I$(KP_DIR)/kernel/$(dir))
 
 objs := inject-hide.o Frid/FridHide.o Config/Log.o Config/Config.o Debug/Debug.o
 
-all: inject-hide.kpm
+all: svc.kpm
 
-inject-hide.kpm: ${objs}
+svc.kpm: ${objs}
 	${CC} -r -o $@ $^
 
 %.o: %.c
-	${CC} $(CFLAGS) $(INCLUDE_FLAGS) -T inject-hide.lds -c -O2 -o $@ $<
+	${CC} $(CFLAGS) $(INCLUDE_FLAGS) -c -O2 -o $@ $<
 
 .PHONY: clean
 clean:
@@ -34,7 +34,7 @@ clean:
 
 
 REMOTE_PATH := /sdcard/Download
-TARGET_NAME := inject-hide.kpm
+TARGET_NAME := svc.kpm
 
 .PHONY: push clean-remote
 
