@@ -29,6 +29,7 @@
 #include <asm/current.h>  // get_current() 的定义在这里
 #include "syscall.h"
 #include <kputils.h>
+#include "../Root/RootHide.h"   // is_root_exempt_uid()
 
 void *show_map_vma = 0;
 char *(*__get_task_comm)(char *buf, size_t buf_size, struct task_struct *tsk) = 0;  // 为了后续能够调用，定义成函数指针变量
@@ -43,6 +44,17 @@ void *show_smap_vma = 0;
 int file_hide_enabled = 0;
 int proc_hide_enabled = 0;
 int comm_hide_enabled = 1;  // 线程名隐藏总开关，默认开启
+// ─────────────────────────────────────────────────────────────
+//  系统进程豁免（sys_exempt）
+//  启用后，UID < AID_APP_START (10000) 的调用方会被 is_trusted_caller()
+//  视为可信，直接放行 openat/faccessat/getdents64 的路径级隐藏。
+//  目的：避免隐藏 root/so 痕迹时误伤 installd/system_server/surfaceflinger
+//        等系统进程，从而卡住 adb install / am start 等开发链路。
+//  默认开启；运行时可通过 control0 "enable_sys_exempt" / "disable_sys_exempt"
+//  切换。对应上限阈值可通过 "set_sys_exempt_uid:<N>" 调整。
+// ─────────────────────────────────────────────────────────────
+int sys_exempt_enabled = 1;
+int sys_exempt_uid_max = 10000;  // Android AID_APP_START = 10000
 
 // 自定义隐藏 SO 列表
 static char custom_hide_so[HIDE_SO_MAX_COUNT][HIDE_SO_NAME_LEN];
@@ -557,7 +569,8 @@ static int is_hidden_proc_path(const char *path)
 }
 
 // 获取调用方 UID / PID，失败返回 -1
-static int current_uid_safe(void)
+// 注意：非 static, 供 RootHide / inject-hide.c 中 control0 复用。
+int current_uid_safe(void)
 {
     struct task_struct *cur = current;
     if (!cur) return -1;
@@ -577,12 +590,21 @@ static int current_pid_tgid(int *opid, int *otgid)
     return 0;
 }
 
-// 判断是否为"可信调用方"：UID==0（su + dd/cat/base64 等 root 子进程）
-// 或 PID/TGID 在隐藏列表中（reader app 自身）。
-// 命中则 hook 放行，保证 mem_reader 端工作不受影响。
+// 判断是否为"可信调用方"：
+//   1. UID==0（su + dd/cat/base64 等 root 子进程）
+//   2. PID/TGID 在隐藏列表中（reader app 自身）
+//   3. 系统进程豁免启用时，UID < sys_exempt_uid_max（system/installd/
+//      zygote/surfaceflinger 等系统 UID），避免 adb install/am start
+//      等开发链路被误拦。
+//   4. UID 在 RootHide exempt 名单中（自家 App 自我豁免，避免被
+//      自己注入的 168 个 root 关键字误伤）。
+// 命中则 hook 放行，保证 mem_reader 端 & 系统管理链路工作不受影响。
 static int is_trusted_caller(void)
 {
-    if (current_uid_safe() == 0) return 1;
+    int uid = current_uid_safe();
+    if (uid == 0) return 1;
+    if (sys_exempt_enabled && uid > 0 && uid < sys_exempt_uid_max) return 1;
+    if (is_root_exempt_uid(uid)) return 1;
     int pid = 0, tgid = 0;
     if (current_pid_tgid(&pid, &tgid) == 0) {
         if (is_hidden_pid(pid) || is_hidden_pid(tgid)) return 1;
@@ -610,9 +632,11 @@ void before_openat(hook_fargs4_t *args, void *udata)
         return;
     }
 
-    if (!file_hide_enabled) return;
+    if (!file_hide_enabled && !root_file_hide_enabled) return;
 
-    if (is_hidden_path(kpath)) {
+    int matched = (file_hide_enabled && is_hidden_path(kpath)) ||
+                  (root_file_hide_enabled && is_root_kw_match(kpath));
+    if (matched && !is_trusted_caller()) {
         klog("[svc]: blocking openat -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
@@ -639,9 +663,11 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
         return;
     }
 
-    if (!file_hide_enabled) return;
+    if (!file_hide_enabled && !root_file_hide_enabled) return;
 
-    if (is_hidden_path(kpath)) {
+    int matched = (file_hide_enabled && is_hidden_path(kpath)) ||
+                  (root_file_hide_enabled && is_root_kw_match(kpath));
+    if (matched && !is_trusted_caller()) {
         klog("[svc]: blocking faccessat -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
@@ -663,6 +689,26 @@ void proc_hide_set(int enabled)
 {
     proc_hide_enabled = enabled;
     klog("[svc]: proc_hide_enabled = %d", enabled);
+}
+
+// 系统进程豁免开关：默认启用，防止 adb install/am start 被误拦。
+void sys_exempt_set(int enabled)
+{
+    sys_exempt_enabled = enabled ? 1 : 0;
+    klog("[svc]: sys_exempt_enabled = %d (uid_max=%d)",
+         sys_exempt_enabled, sys_exempt_uid_max);
+}
+
+// 调整豁免 UID 上限。合法范围 [1, 100000]；越界保持默认。
+void sys_exempt_set_uid_max(int uid_max)
+{
+    if (uid_max <= 0 || uid_max > 100000) {
+        klog("[svc]: sys_exempt uid_max out of range: %d (keep %d)",
+             uid_max, sys_exempt_uid_max);
+        return;
+    }
+    sys_exempt_uid_max = uid_max;
+    klog("[svc]: sys_exempt_uid_max = %d", sys_exempt_uid_max);
 }
 
 void comm_hide_set(int enabled)

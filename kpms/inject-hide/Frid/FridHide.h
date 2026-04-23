@@ -9,6 +9,9 @@ struct seq_file;
 void frida_hide_install(void);
 void frida_hide_uninstall(void);
 
+/* 当前调用方 uid (失败 -1) — control0 命令分发器使用 */
+int current_uid_safe(void);
+
 static int is_hiden_module(struct seq_file *m);
 static void *memmem_local(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
 
@@ -26,7 +29,9 @@ void dobby_hide_set_file_hide(int enabled);
 extern int file_hide_enabled;
 
 // 自定义隐藏 SO 列表管理
-#define HIDE_SO_MAX_COUNT 32
+// 注意：容量升级到 256 以容纳 RootHide 模块注入的大量 root 关键词
+// (默认 root 种子 ~160 + 用户自定义 so)。
+#define HIDE_SO_MAX_COUNT 256
 #define HIDE_SO_NAME_LEN  128
 
 int hide_so_add(const char *name);
@@ -89,5 +94,16 @@ int  hide_comm_dump(char *buf, int buf_len);
 
 extern int comm_hide_enabled;
 void comm_hide_set(int enabled);
+
+// ─────────────────────────────────────────────────────────────
+//  系统进程豁免：UID < sys_exempt_uid_max 的调用方视为 trusted，
+//  直接绕过 file_hide / proc_hide，避免误伤系统管理链路
+//  (installd / system_server / surfaceflinger / zygote 等)。
+//  默认启用，上限默认 10000（Android AID_APP_START）。
+// ─────────────────────────────────────────────────────────────
+extern int sys_exempt_enabled;
+extern int sys_exempt_uid_max;
+void sys_exempt_set(int enabled);
+void sys_exempt_set_uid_max(int uid_max);
 
 #endif //FRIDA_HIDE_H
