@@ -47,6 +47,8 @@ extern int root_hide_enabled;
  * 不影响用户通过 add_hide_so 添加的项。由 root_hide_set() 控制。 */
 extern int root_file_hide_enabled;
 int  is_root_kw_match(const char *path);
+int  is_root_content_match(const char *text);
+int  is_root_content_match_n(const char *text, int len);
 
 /* 关键词列表管理（独立于 FridHide 的 custom_hide_so，不同步注入） */
 int  root_kw_add(const char *name);

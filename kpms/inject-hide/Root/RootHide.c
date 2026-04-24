@@ -395,6 +395,39 @@ int is_root_kw_match(const char *path)
     return 0;
 }
 
+static void *root_memmem(const void *haystack, int haystacklen,
+                         const void *needle, int needlelen)
+{
+    if (!haystack || !needle || haystacklen <= 0 || needlelen <= 0)
+        return 0;
+    if (haystacklen < needlelen) return 0;
+    for (int i = 0; i <= haystacklen - needlelen; i++) {
+        if (memcmp((const char *)haystack + i, needle, needlelen) == 0)
+            return (void *)((const char *)haystack + i);
+    }
+    return 0;
+}
+
+int is_root_content_match_n(const char *text, int len)
+{
+    if (!text || len <= 0 || !root_file_hide_enabled) return 0;
+    for (int i = 0; i < root_kw_n; i++) {
+        const char *kw = root_kw[i];
+        if (!kw[0]) continue;
+        int klen = (int)strlen(kw);
+        if (klen <= 0) continue;
+        if (kw[0] != '/' && klen < 5) continue;
+        if (root_memmem(text, len, kw, klen)) return 1;
+    }
+    return 0;
+}
+
+int is_root_content_match(const char *text)
+{
+    if (!text) return 0;
+    return is_root_content_match_n(text, (int)strlen(text));
+}
+
 void root_hide_install(void)
 {
     /* 1) 准备默认 root 关键词种子 */
