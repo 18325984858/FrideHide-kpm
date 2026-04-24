@@ -1,9 +1,10 @@
 /*
  * @file   Root/RootHide.c
- * @brief  Root 痕迹隐藏实现。零 hook、零侵入：纯粹通过 FridHide
- *         已有的 hide_so / file_hide 通路实现路径级隐藏。
+ * @brief  Root 痕迹隐藏实现。复用 FridHide 的路径类 hook，
+ *         但 root_kw[] 与用户 hide_so[] 完全分离。
  *
- * 隐藏覆盖面（依赖 before_openat / before_faccessat 的 strstr 匹配）
+ * 隐藏覆盖面（依赖 before_openat / before_faccessat / stat/readlink/execve
+ *             中的 is_root_kw_match() 匹配）
  *   /system/bin/su, /system/xbin/su, /sbin/su, /data/adb/*
  *   /sbin/.magisk*, /data/adb/magisk*, magisk binary 名
  *   /data/adb/ksu*, /data/adb/ksud, KernelSU manager 私有路径
@@ -242,11 +243,8 @@ static const char *const root_kw_defaults[] = {
 int root_hide_enabled = 1;            /* 默认开启 root 痕迹隐藏 */
 int root_file_hide_enabled = 1;       /* 仅匹配 root_kw[] 的路径过滤开关，随 root_hide 默认开启 */
 
-/* 本模块注入到 FridHide hide_so 列表的关键词副本，用于精确撤销。 */
 static char root_kw[ROOT_KW_MAX_COUNT][ROOT_KW_NAME_LEN];
 static int  root_kw_n = 0;
-/* 标记某关键词是否已成功注入到 FridHide 的 hide_so 列表 */
-static char root_kw_injected[ROOT_KW_MAX_COUNT];
 
 /* ────────────────────────────────────────────────────────────────── */
 /*  内部辅助                                                          */
@@ -258,43 +256,6 @@ static int root_kw_index(const char *name)
         if (strcmp(root_kw[i], name) == 0) return i;
     }
     return -1;
-}
-
-/* 将 root_kw[i] 注入 FridHide 的 hide_so 列表 */
-static void root_kw_inject_one(int i)
-{
-    if (i < 0 || i >= root_kw_n) return;
-    if (root_kw_injected[i]) return;
-    int rc = hide_so_add(root_kw[i]);
-    /* rc == 0 成功；rc == -3 已存在（被用户先添加过）。两种情况都不再
-       由我们撤销，所以只在 rc == 0 时标记为"我们注入的"。 */
-    if (rc == 0) {
-        root_kw_injected[i] = 1;
-    } else {
-        root_kw_injected[i] = 0;
-        if (rc == -2) {
-            klog("[root_hide] hide_so list full, cannot inject '%s'", root_kw[i]);
-        }
-    }
-}
-
-/* 将 root_kw[i] 从 FridHide 的 hide_so 列表中撤销 */
-static void root_kw_revoke_one(int i)
-{
-    if (i < 0 || i >= root_kw_n) return;
-    if (!root_kw_injected[i]) return;
-    hide_so_remove(root_kw[i]);
-    root_kw_injected[i] = 0;
-}
-
-static void root_kw_inject_all(void)
-{
-    for (int i = 0; i < root_kw_n; i++) root_kw_inject_one(i);
-}
-
-static void root_kw_revoke_all(void)
-{
-    for (int i = 0; i < root_kw_n; i++) root_kw_revoke_one(i);
 }
 
 /* ────────────────────────────────────────────────────────────────── */
@@ -310,9 +271,7 @@ int root_kw_add(const char *name)
     int idx = root_kw_n++;
     strncpy(root_kw[idx], name, ROOT_KW_NAME_LEN - 1);
     root_kw[idx][ROOT_KW_NAME_LEN - 1] = '\0';
-    root_kw_injected[idx] = 0;
 
-    if (root_hide_enabled) root_kw_inject_one(idx);
     klog("[root_hide] kw_add: '%s', total=%d", name, root_kw_n);
     return 0;
 }
@@ -322,17 +281,12 @@ int root_kw_remove(const char *name)
     int idx = root_kw_index(name);
     if (idx < 0) return -2;
 
-    /* 撤销在 FridHide 列表中的注入 */
-    root_kw_revoke_one(idx);
-
     /* 末尾元素移到当前位置 */
     int last = root_kw_n - 1;
     if (idx != last) {
         memcpy(root_kw[idx], root_kw[last], ROOT_KW_NAME_LEN);
-        root_kw_injected[idx] = root_kw_injected[last];
     }
     root_kw[last][0] = '\0';
-    root_kw_injected[last] = 0;
     root_kw_n--;
 
     klog("[root_hide] kw_remove: '%s', total=%d", name, root_kw_n);
@@ -341,10 +295,8 @@ int root_kw_remove(const char *name)
 
 void root_kw_clear(void)
 {
-    root_kw_revoke_all();
     for (int i = 0; i < root_kw_n; i++) {
         root_kw[i][0] = '\0';
-        root_kw_injected[i] = 0;
     }
     root_kw_n = 0;
     klog("[root_hide] kw_clear");
@@ -360,10 +312,8 @@ void root_kw_reset_defaults(void)
         if (strlen(s) >= ROOT_KW_NAME_LEN) continue;
         strncpy(root_kw[root_kw_n], s, ROOT_KW_NAME_LEN - 1);
         root_kw[root_kw_n][ROOT_KW_NAME_LEN - 1] = '\0';
-        root_kw_injected[root_kw_n] = 0;
         root_kw_n++;
     }
-    if (root_hide_enabled) root_kw_inject_all();
     klog("[root_hide] kw_reset_defaults, total=%d", root_kw_n);
 }
 
@@ -374,9 +324,7 @@ int root_kw_dump(char *buf, int buf_len)
     if (!buf || buf_len <= 0) return -1;
     int offset = 0;
     for (int i = 0; i < root_kw_n && offset < buf_len - 1; i++) {
-        int n = snprintf(buf + offset, buf_len - offset, "%s%s\n",
-                         root_kw[i],
-                         root_kw_injected[i] ? "" : " [pending]");
+        int n = snprintf(buf + offset, buf_len - offset, "%s\n", root_kw[i]);
         if (n < 0 || n >= buf_len - offset) break;
         offset += n;
     }
@@ -454,8 +402,8 @@ void root_hide_install(void)
     /* 2) 播种默认包名豁免名单（APatch + game），必须在启用前就位，
      *    否则 root_hide 一开就会自伤这两个 App。 */
     root_exempt_pkg_reset_defaults();
-    /* 3) 默认启用 root_hide：把关键词注入 hide_so 并打开 root_file_hide。
-     *    豁免名单已先就位，APatch / game 不会被拦。其它 App 仍受限制。 */
+    /* 3) 默认启用 root_hide：只打开 root_file_hide；root_kw[] 不再注入
+     *    hide_so[]，所以 UI 的 SO 列表只显示用户添加的 SO 文件名。 */
     root_hide_set(1);
     klog("[root_hide] install: %d default kw, %d exempt pkg, ENABLED",
          root_kw_n, root_exempt_pkg_count());
@@ -463,9 +411,8 @@ void root_hide_install(void)
 
 void root_hide_uninstall(void)
 {
-    /* 卸载时确保不残留：撤销注入并关闭专属开关 */
+    /* 卸载时关闭专属开关；root_kw[] 从未注入 hide_so[]，无须撤销 */
     if (root_hide_enabled) {
-        root_kw_revoke_all();
         root_hide_enabled = 0;
         root_file_hide_enabled = 0;
     }

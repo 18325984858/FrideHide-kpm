@@ -5,22 +5,20 @@
  * 设计说明
  * --------
  *   本模块不重复 hook 任何 syscall，全部复用 FridHide 已注册的
- *   openat / faccessat / getdents64 等 hook 链路。
+ *   openat / faccessat / stat/readlink/execve 等 hook 链路。
  *   工作方式：
- *     1. install 时把内置的 root 关键词种子注入到 FridHide 的
- *        custom_hide_so[] 列表（通过 hide_so_add()）；
- *     2. 自动调用 dobby_hide_set_file_hide(1) 启用文件级隐藏；
- *     3. uninstall 时从 hide_so[] 中精确移除自己注入的关键词，
- *        不影响用户运行时另外添加的项。
+ *     1. install 时只维护独立 root_kw[] 关键词种子；
+ *     2. root_file_hide_enabled 开启后由 is_root_kw_match() 匹配；
+ *     3. 不再把 root 关键词注入 custom_hide_so[]，避免污染
+ *        “隐藏 SO 关键字列表”。
  *
- *   同时维护一份独立的 root_kw[] 列表，用于：
- *     - 记录"哪些是本模块注入的"，方便干净卸载；
- *     - 提供独立的 control0 命令分发（add/list/remove/clear/reset）。
+ *   root_kw[] 提供独立的 control0 命令分发
+ *   （add/list/remove/clear/reset），与 hide_so[] 互不混用。
  *
  * 使用 (control0)
  * --------------
- *   enable_root_hide              启用 root 隐藏（自动同步注入种子并打开 file_hide）
- *   disable_root_hide             停用 root 隐藏（撤销注入，但保留 file_hide 状态由用户）
+ *   enable_root_hide              启用 root 隐藏（打开 root_file_hide）
+ *   disable_root_hide             停用 root 隐藏（关闭 root_file_hide）
  *   add_hide_root:<kw>[,<kw>...]  追加 root 关键词
  *   remove_hide_root:<kw>         移除 root 关键词
  *   list_hide_root                列出当前 root 关键词
@@ -50,7 +48,7 @@ extern int root_hide_enabled;
 extern int root_file_hide_enabled;
 int  is_root_kw_match(const char *path);
 
-/* 关键词列表管理（独立于 FridHide 的 custom_hide_so，但会同步注入） */
+/* 关键词列表管理（独立于 FridHide 的 custom_hide_so，不同步注入） */
 int  root_kw_add(const char *name);
 int  root_kw_remove(const char *name);
 void root_kw_clear(void);

@@ -32,8 +32,8 @@ void dobby_hide_set_file_hide(int enabled);
 extern int file_hide_enabled;
 
 // 自定义隐藏 SO 列表管理
-// 注意：容量升级到 256 以容纳 RootHide 模块注入的大量 root 关键词
-// (默认 root 种子 ~160 + 用户自定义 so)。
+// 仅保存用户通过 add_hide_so 添加的 SO 文件名/关键词；RootHide 的
+// root_kw[] 已独立维护，不再注入这里。
 #define HIDE_SO_MAX_COUNT 256
 #define HIDE_SO_NAME_LEN  128
 
