@@ -127,6 +127,21 @@ static long svc_init(const char *args, const char *event, void *__user reserved)
     return 0;
 }
 
+static void ctl_copy_out(char __user *out_msg, int outlen, const char *msg)
+{
+    if (!out_msg || outlen <= 0) return;
+    if (!msg) msg = "";
+
+    int n = 0;
+    while (n < outlen - 1 && msg[n]) n++;
+    if (n > 0) compat_copy_to_user(out_msg, msg, n);
+
+    char nul = '\0';
+    compat_copy_to_user(out_msg + n, &nul, 1);
+}
+
+#define compat_copy_to_user(dst, src, len) ctl_copy_out((dst), outlen, (const char *)(src))
+
 static long svc_control0(const char *args, char *__user out_msg, int outlen)
 {
     klog("[svc] control0, args: %s", args);
@@ -543,7 +558,7 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             return 0;
         }
         if (strncmp(args, "list_hide_root", 14) == 0) {
-            static char list_buf[2048];
+            static char list_buf[8192];
             int count = root_kw_count();
             int offset = snprintf(list_buf, sizeof(list_buf),
                                   "total: %d (enabled=%d)\n", count, root_hide_enabled);
@@ -632,6 +647,8 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
     compat_copy_to_user(out_msg, echo, sizeof(echo));
     return 0;
 }
+
+#undef compat_copy_to_user
 
 static long svc_control1(void *a1, void *a2, void *a3)
 {
