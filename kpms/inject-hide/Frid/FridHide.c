@@ -142,6 +142,12 @@ int is_custom_hidden_so(const char *str)
     return 0;
 }
 
+/* P0 扩展 hook handler 前向声明（实现位于本文件末尾） */
+void before_newfstatat(hook_fargs4_t *args, void *udata);
+void before_statx(hook_fargs5_t *args, void *udata);
+void before_readlinkat(hook_fargs4_t *args, void *udata);
+void before_execve(hook_fargs4_t *args, void *udata);
+
 void frida_hide_install(void)
 {
     klog("frida_hide_install");
@@ -212,6 +218,33 @@ void frida_hide_install(void)
         klog("getdents64 hook: %s", getdents64_hook_status ? "success" : "failed");
     }
 
+    // ── P0 扩展 hook: stat 系列 + execve 系列 ──
+    // 这些 hook 失败不影响主功能，所以只 klog 不更新 *_hook_status
+    {
+        /* __NR_newfstatat 在本头文件里靠 __ARCH_WANT_NEW_STAT 条件 #define，
+         * 用无条件可见的 __NR3264_fstatat 替代（值同样为 79）。 */
+        hook_err_t err = fp_hook_syscalln(__NR3264_fstatat, 4, before_newfstatat, 0, NULL);
+        klog("newfstatat hook: %s", err ? "failed" : "success");
+    }
+    {
+        hook_err_t err = fp_hook_syscalln(__NR_statx, 5, before_statx, 0, NULL);
+        klog("statx hook: %s", err ? "failed" : "success");
+    }
+    {
+        hook_err_t err = fp_hook_syscalln(__NR_readlinkat, 4, before_readlinkat, 0, NULL);
+        klog("readlinkat hook: %s", err ? "failed" : "success");
+    }
+    /* execve(filename, argv, envp) — path 在 arg0 → udata=0
+     * execveat(dirfd, pathname, argv, envp, flags) — path 在 arg1 → udata=1 */
+    {
+        hook_err_t err = fp_hook_syscalln(__NR_execve, 3, before_execve, 0, (void *)0);
+        klog("execve hook: %s", err ? "failed" : "success");
+    }
+    {
+        hook_err_t err = fp_hook_syscalln(__NR_execveat, 5, before_execve, 0, (void *)1);
+        klog("execveat hook: %s", err ? "failed" : "success");
+    }
+
 }
 
 void frida_hide_uninstall(void)
@@ -252,6 +285,13 @@ void frida_hide_uninstall(void)
         fp_unhook_syscalln(__NR_getdents64, 0, after_getdents64);
         getdents64_hook_status = 0;
     }
+
+    /* P0 扩展 hook 的反卸载（无 status 标志，直接尝试 unhook） */
+    fp_unhook_syscalln(__NR3264_fstatat, before_newfstatat, 0);
+    fp_unhook_syscalln(__NR_statx,      before_statx,      0);
+    fp_unhook_syscalln(__NR_readlinkat, before_readlinkat, 0);
+    fp_unhook_syscalln(__NR_execve,     before_execve,     0);
+    fp_unhook_syscalln(__NR_execveat,   before_execve,     0);
 
     file_hide_enabled = 0;
     proc_hide_enabled = 0;
@@ -540,6 +580,9 @@ int is_hidden_pid(int pid)
     return 0;
 }
 
+/* 前向声明：is_hidden_proc_path 需要查 current 的 pid/tgid */
+static int current_pid_tgid(int *opid, int *otgid);
+
 // 纯数字字符串 → PID → 是否隐藏
 static int is_hidden_pid_str(const char *s, int len)
 {
@@ -554,13 +597,30 @@ static int is_hidden_pid_str(const char *s, int len)
     return is_hidden_pid(v);
 }
 
-// 路径是否形如 /proc/<hidden_pid>[/...]
+// 路径是否形如 /proc/<hidden_pid>[/...] 或 /proc/self[/...]/proc/thread-self[/...]
+// 自检（自己读自己 /proc/self）也要被遮，否则 App 自查 maps/status 仍能发现注入。
 static int is_hidden_proc_path(const char *path)
 {
     if (!path) return 0;
     if (path[0] != '/' || path[1] != 'p' || path[2] != 'r' ||
         path[3] != 'o' || path[4] != 'c' || path[5] != '/') return 0;
     const char *p = path + 6;
+
+    /* /proc/self[/...]  → 当前 pid 是否在 hide_pid 名单 */
+    if (p[0] == 's' && p[1] == 'e' && p[2] == 'l' && p[3] == 'f' &&
+        (p[4] == '\0' || p[4] == '/')) {
+        int pid = 0, tgid = 0;
+        if (current_pid_tgid(&pid, &tgid) != 0) return 0;
+        return is_hidden_pid(pid) || is_hidden_pid(tgid);
+    }
+    /* /proc/thread-self[/...]  → 同上 */
+    if (memcmp(p, "thread-self", 11) == 0 && (p[11] == '\0' || p[11] == '/')) {
+        int pid = 0, tgid = 0;
+        if (current_pid_tgid(&pid, &tgid) != 0) return 0;
+        return is_hidden_pid(pid) || is_hidden_pid(tgid);
+    }
+
+    /* /proc/<digits>[/...] */
     const char *start = p;
     while (*p >= '0' && *p <= '9') p++;
     if (p == start) return 0;
@@ -683,6 +743,117 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
         args->skip_origin = 1;
         args->ret = -ENOENT;
     }
+}
+
+// ───────────────────────────────────────────────────────────────
+//  P0 扩展 hook: stat 系列 + execve 系列
+//
+//  目的：openat/faccessat 只覆盖了"打开 / 存在性检查"两条入口；
+//  实际 root 检测代码大量依赖：
+//    * stat / lstat / newfstatat / statx —— 取 mode 判断文件存在
+//    * readlinkat                        —— /proc/self/exe 判 magisk
+//    * execve / execveat                 —— 直接 exec su / magisk / ksud
+//  如果不覆盖这些 syscall, 即便 openat 全拦也会被绕过。
+//
+//  统一逻辑：
+//    1. 拷贝 path 参数到内核栈
+//    2. 命中 hide_pid /proc 路径 → 视 proc_hide_enabled 拦截
+//    3. 命中 file_hide / root_file_hide 关键字 → 拦截
+//    4. is_trusted_caller() 命中则放行（APatch、game、systemd uid 等）
+//  返回值：syscall 通常返回 -ENOENT 表示文件不存在，是检测端最自然的"信号"。
+// ───────────────────────────────────────────────────────────────
+
+/* 通用 path 检查：1=拦截，0=放行；ret_errno 写入 args->ret */
+static int hide_check_path(const char *kpath)
+{
+    if (!kpath) return 0;
+    if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller())
+        return 1;
+    if (!file_hide_enabled && !root_file_hide_enabled) return 0;
+    int matched = (file_hide_enabled && is_hidden_path(kpath)) ||
+                  (root_file_hide_enabled && is_root_kw_match(kpath));
+    if (matched && !is_trusted_caller()) return 1;
+    return 0;
+}
+
+/* newfstatat(int dirfd, const char __user *path, struct stat __user *st, int flag)
+ * statx(int dfd, const char __user *path, int flags, unsigned mask,
+ *       struct statx __user *buffer)
+ * 两者 path 都在 arg1。 */
+void before_newfstatat(hook_fargs4_t *args, void *udata)
+{
+    const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
+    if (!pathname) return;
+    char kpath[256];
+    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
+    if (len <= 0) return;
+    kpath[len] = '\0';
+    if (hide_check_path(kpath)) {
+        klog("[svc]: blocking stat -> %s", kpath);
+        args->skip_origin = 1;
+        args->ret = -ENOENT;
+    }
+}
+
+void before_statx(hook_fargs5_t *args, void *udata)
+{
+    const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
+    if (!pathname) return;
+    char kpath[256];
+    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
+    if (len <= 0) return;
+    kpath[len] = '\0';
+    if (hide_check_path(kpath)) {
+        klog("[svc]: blocking statx -> %s", kpath);
+        args->skip_origin = 1;
+        args->ret = -ENOENT;
+    }
+}
+
+/* readlinkat(int dirfd, const char __user *path, char __user *buf, size_t)
+ * 主要用来挡 readlinkat(/proc/self/exe) / readlinkat(/proc/<pid>/exe) 反查。 */
+void before_readlinkat(hook_fargs4_t *args, void *udata)
+{
+    const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
+    if (!pathname) return;
+    char kpath[256];
+    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
+    if (len <= 0) return;
+    kpath[len] = '\0';
+    if (hide_check_path(kpath)) {
+        klog("[svc]: blocking readlinkat -> %s", kpath);
+        args->skip_origin = 1;
+        args->ret = -ENOENT;
+    }
+}
+
+/* execve(const char __user *filename, ...)
+ * execveat(int dirfd, const char __user *pathname, ...)
+ *  - execve  : path 在 arg0
+ *  - execveat: path 在 arg1
+ *  hook 时通过 udata 区分（注册时传 0 / 1）。
+ *
+ *  设计：仅当 root_file_hide_enabled 命中时才拦，避免 dobby/file_hide
+ *  把普通 App 业务命令一并干掉。is_trusted_caller 仍然放行（APatch /
+ *  game 自身要能 exec su 拿 superkey）。 */
+void before_execve(hook_fargs4_t *args, void *udata)
+{
+    int path_arg = (udata == (void *)1) ? 1 : 0;
+    const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, path_arg);
+    if (!pathname) return;
+    char kpath[256];
+    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
+    if (len <= 0) return;
+    kpath[len] = '\0';
+
+    /* 仅 root 关键词命中时拦截，且 trusted caller 放行 */
+    if (!root_file_hide_enabled) return;
+    if (!is_root_kw_match(kpath)) return;
+    if (is_trusted_caller()) return;
+
+    klog("[svc]: blocking execve -> %s", kpath);
+    args->skip_origin = 1;
+    args->ret = -ENOENT;
 }
 
 // 供外部调用: 启用/禁用文件级隐藏
