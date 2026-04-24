@@ -1275,6 +1275,23 @@ static int is_game_own_native_path(const char *path)
     return str_ends_with_local(base, ".so");
 }
 
+static int readlink_result_is_game_own_native_path(const char *buf, long len)
+{
+    if (!buf || len <= 0) return 0;
+    char path[512];
+    long copy_len = len;
+    if (copy_len >= (long)sizeof(path)) copy_len = (long)sizeof(path) - 1;
+    while (copy_len > 0) {
+        char c = buf[copy_len - 1];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') break;
+        copy_len--;
+    }
+    if (copy_len <= 0) return 0;
+    memcpy(path, buf, copy_len);
+    path[copy_len] = '\0';
+    return is_game_own_native_path(path);
+}
+
 // openat(int dirfd, const char __user *pathname, int flags, mode_t mode) hook
 // 拦截打开 dobby SO 文件的操作, 需要通过 control0 "enable_file_hide" 启用
 void before_openat(hook_fargs4_t *args, void *udata)
@@ -1446,6 +1463,7 @@ void after_readlinkat(hook_fargs4_t *args, void *udata)
     unsigned long bufsiz = (unsigned long)syscall_argn(args, 3);
     if (!ubuf || bufsiz == 0 || !__arch_copy_from_user) return;
     if (__arch_copy_from_user(read_filter_in, ubuf, ret) != 0) return;
+    if (readlink_result_is_game_own_native_path(read_filter_in, ret)) return;
     if ((int)args->local.data1 != PROC_FD_NONE || sensitive_span_match(read_filter_in, (int)ret)) {
         if (sensitive_span_match(read_filter_in, (int)ret)) {
             spoof_readlink_result(ubuf, bufsiz, args);
