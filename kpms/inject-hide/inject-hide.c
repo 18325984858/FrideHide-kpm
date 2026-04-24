@@ -233,9 +233,11 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
              *      is_hidden_pid(tgid) → game 全部线程立即 trusted
              *   2) 调用方 UID 加入 root_exempt_uid → 未来 fork 出来的
              *      子进程（双 fork daemon、popen sh 等）也走 UID 豁免
-             *  这避免了 "game 把自己列进 hide_pkg 之后，又被自己设的
-             *  root 关键字拦截 /proc/self/* 而崩溃" 的死循环。 */
-            if (added > 0) {
+             *  注意：无论 add 是否成功（包名可能早已被 install 默认列入，
+             *  导致 added=0/failed=1），只要被调用过这个命令，调用方就
+             *  应该被信任，否则会出现 "包名 install 时已加 → 用户层
+             *  add 永远 failed → 自动豁免永不触发 → game 自杀" 的死锁。 */
+            {
                 int pid = 0, tgid = 0;
                 if (current_pid_tgid_safe(&pid, &tgid) == 0 && tgid > 0) {
                     hide_pid_add(tgid);
