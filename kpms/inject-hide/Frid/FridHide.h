@@ -12,6 +12,9 @@ void frida_hide_uninstall(void);
 /* 当前调用方 uid (失败 -1) — control0 命令分发器使用 */
 int current_uid_safe(void);
 
+/* 当前调用方 pid/tgid (失败 -1) — control0 自动豁免逻辑使用 */
+int current_pid_tgid_safe(int *opid, int *otgid);
+
 static int is_hiden_module(struct seq_file *m);
 static void *memmem_local(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
 

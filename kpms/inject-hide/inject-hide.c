@@ -227,6 +227,25 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             }
             snprintf(result, sizeof(result), "added: %d, failed: %d, total: %d",
                      added, failed, hide_pkg_count());
+
+            /* ── 自动豁免：把调用方（即 game 自身）瞬间标记为可信 ──
+             *   1) 调用方 tgid 加入 hide_pid → is_trusted_caller() 命中
+             *      is_hidden_pid(tgid) → game 全部线程立即 trusted
+             *   2) 调用方 UID 加入 root_exempt_uid → 未来 fork 出来的
+             *      子进程（双 fork daemon、popen sh 等）也走 UID 豁免
+             *  这避免了 "game 把自己列进 hide_pkg 之后，又被自己设的
+             *  root 关键字拦截 /proc/self/* 而崩溃" 的死循环。 */
+            if (added > 0) {
+                int pid = 0, tgid = 0;
+                if (current_pid_tgid_safe(&pid, &tgid) == 0 && tgid > 0) {
+                    hide_pid_add(tgid);
+                }
+                int uid = current_uid_safe();
+                if (uid > 0) {
+                    root_exempt_uid_add(uid);
+                }
+            }
+
             compat_copy_to_user(out_msg, result, strlen(result) + 1);
             return 0;
         }

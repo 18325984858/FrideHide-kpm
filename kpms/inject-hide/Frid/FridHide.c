@@ -650,6 +650,12 @@ static int current_pid_tgid(int *opid, int *otgid)
     return 0;
 }
 
+/* 对外导出版本：供 inject-hide.c 在 add_hide_pkg 时自动豁免调用方使用 */
+int current_pid_tgid_safe(int *opid, int *otgid)
+{
+    return current_pid_tgid(opid, otgid);
+}
+
 // 判断是否为"可信调用方"：
 //   1. UID==0（su + dd/cat/base64 等 root 子进程）
 //   2. PID/TGID 在隐藏列表中（reader app 自身）
