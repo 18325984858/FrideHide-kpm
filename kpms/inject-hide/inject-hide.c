@@ -189,7 +189,7 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
 
         // 列出所有自定义隐藏 SO
         if (strncmp(args, "list_hide_so", 12) == 0) {
-            char list_buf[1024];
+            static char list_buf[8192];
             int count = hide_so_count();
             int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
             if (count > 0) {
@@ -263,7 +263,7 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             return 0;
         }
         if (strncmp(args, "list_hide_pkg", 13) == 0) {
-            char list_buf[1024];
+            static char list_buf[8192];
             int count = hide_pkg_count();
             int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
             if (count > 0) hide_pkg_dump(list_buf + offset, sizeof(list_buf) - offset);
@@ -312,7 +312,7 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             return 0;
         }
         if (strncmp(args, "list_hide_comm", 14) == 0) {
-            char list_buf[1024];
+            static char list_buf[8192];
             int count = hide_comm_count();
             int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
             if (count > 0) hide_comm_dump(list_buf + offset, sizeof(list_buf) - offset);
@@ -380,7 +380,7 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             return 0;
         }
         if (strncmp(args, "list_hide_pid", 13) == 0) {
-            char list_buf[256];
+            static char list_buf[2048];
             int count = hide_pid_count();
             int offset = snprintf(list_buf, sizeof(list_buf), "total: %d\n", count);
             if (count > 0) hide_pid_dump(list_buf + offset, sizeof(list_buf) - offset);
@@ -413,6 +413,18 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             return 0;
         }
         if (strncmp(args, "status", 6) == 0) {
+            /* 自动豁免：UI 进入 InjectHideActivity 必发 status；这是
+             * 整个 refreshAll 流程时序最早的命令。在这里把调用方 tgid
+             * 加入 hide_pid、UID 加入 root_exempt_uid，可以保证后续
+             * list_hide_so / list_hide_pkg / list_running_apps 等调用
+             * 都已 trusted，避免它们被 P0 stat/openat hook 干扰。 */
+            {
+                int pid = 0, tgid = 0;
+                if (current_pid_tgid_safe(&pid, &tgid) == 0 && tgid > 0)
+                    hide_pid_add(tgid);
+                int uid = current_uid_safe();
+                if (uid > 0) root_exempt_uid_add(uid);
+            }
             char status[256];
             snprintf(status, sizeof(status),
                      "proc_hide=%d\nfile_hide=%d\ncomm_hide=%d\nhide_pid_count=%d\nhide_so_count=%d\nhide_pkg_count=%d\nhide_comm_count=%d\nsys_exempt=%d\nsys_exempt_uid_max=%d\nlog_enabled=%d\n",
@@ -531,7 +543,7 @@ static long svc_control0(const char *args, char *__user out_msg, int outlen)
             return 0;
         }
         if (strncmp(args, "list_hide_root", 14) == 0) {
-            char list_buf[2048];
+            static char list_buf[2048];
             int count = root_kw_count();
             int offset = snprintf(list_buf, sizeof(list_buf),
                                   "total: %d (enabled=%d)\n", count, root_hide_enabled);
