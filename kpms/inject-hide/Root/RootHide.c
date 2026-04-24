@@ -239,8 +239,8 @@ static const char *const root_kw_defaults[] = {
 /* ────────────────────────────────────────────────────────────────── */
 /*  内部状态                                                          */
 /* ────────────────────────────────────────────────────────────────── */
-int root_hide_enabled = 0;
-int root_file_hide_enabled = 0;       /* 仅匹配 root_kw[] 的路径过滤开关 */
+int root_hide_enabled = 1;            /* 默认开启 root 痕迹隐藏 */
+int root_file_hide_enabled = 1;       /* 仅匹配 root_kw[] 的路径过滤开关，随 root_hide 默认开启 */
 
 /* 本模块注入到 FridHide hide_so 列表的关键词副本，用于精确撤销。 */
 static char root_kw[ROOT_KW_MAX_COUNT][ROOT_KW_NAME_LEN];
@@ -449,9 +449,16 @@ int is_root_kw_match(const char *path)
 
 void root_hide_install(void)
 {
-    /* 仅准备数据，不主动启用。由 control0 "enable_root_hide" 触发。 */
+    /* 1) 准备默认 root 关键词种子 */
     root_kw_reset_defaults();
-    klog("[root_hide] install: %d default kw seeded (disabled)", root_kw_n);
+    /* 2) 播种默认包名豁免名单（APatch + game），必须在启用前就位，
+     *    否则 root_hide 一开就会自伤这两个 App。 */
+    root_exempt_pkg_reset_defaults();
+    /* 3) 默认启用 root_hide：把关键词注入 hide_so 并打开 root_file_hide。
+     *    豁免名单已先就位，APatch / game 不会被拦。其它 App 仍受限制。 */
+    root_hide_set(1);
+    klog("[root_hide] install: %d default kw, %d exempt pkg, ENABLED",
+         root_kw_n, root_exempt_pkg_count());
 }
 
 void root_hide_uninstall(void)
@@ -525,4 +532,122 @@ int root_exempt_uid_dump(char *buf, int buf_len)
     }
     if (offset == 0) buf[0] = '\0';
     return offset;
+}
+
+/* ──────────── 包名前缀豁免实现 ────────────
+ *  task->comm 长度限制：TASK_COMM_LEN=16，最多 15 个有效字符。
+ *  Android zygote fork 时调用 set_task_comm(task, packageName)，会把
+ *  包名截断到 15 字节存入 comm。所以这里也按 15 字节做前缀比较。
+ */
+#define EXEMPT_PKG_CMP_LEN 15
+static char exempt_pkgs[EXEMPT_PKG_MAX_COUNT][EXEMPT_PKG_NAME_LEN];
+static int  exempt_pkg_n = 0;
+
+/* 默认豁免包名（启动即生效，无需应用层注册）：
+ *   me.bmax.apatch              APatch 管理器（14B 完整匹配）
+ *   com.example.dobbyproject    本 game（zygote 把 comm 截到
+ *                               "com.example.dob" 15B 后仍能命中）
+ *  其它任何 App 不在此表 → 受 root_hide 全部限制。
+ */
+static const char *const exempt_pkg_defaults[] = {
+    "me.bmax.apatch",
+    "com.example.dobbyproject",
+    NULL,
+};
+
+int root_exempt_pkg_count(void) { return exempt_pkg_n; }
+
+static int exempt_pkg_index(const char *pkg)
+{
+    if (!pkg) return -1;
+    for (int i = 0; i < exempt_pkg_n; i++) {
+        if (strcmp(exempt_pkgs[i], pkg) == 0) return i;
+    }
+    return -1;
+}
+
+int root_exempt_pkg_add(const char *pkg)
+{
+    if (!pkg || !pkg[0]) return -1;
+    if (strlen(pkg) >= EXEMPT_PKG_NAME_LEN) return -4;
+    if (exempt_pkg_index(pkg) >= 0) return 0;            /* 幂等 */
+    if (exempt_pkg_n >= EXEMPT_PKG_MAX_COUNT) {
+        klog("[root_hide] exempt_pkg full (%d)", EXEMPT_PKG_MAX_COUNT);
+        return -2;
+    }
+    strncpy(exempt_pkgs[exempt_pkg_n], pkg, EXEMPT_PKG_NAME_LEN - 1);
+    exempt_pkgs[exempt_pkg_n][EXEMPT_PKG_NAME_LEN - 1] = '\0';
+    exempt_pkg_n++;
+    klog("[root_hide] exempt_pkg_add: '%s', total=%d", pkg, exempt_pkg_n);
+    return 0;
+}
+
+int root_exempt_pkg_remove(const char *pkg)
+{
+    int idx = exempt_pkg_index(pkg);
+    if (idx < 0) return -1;
+    int last = exempt_pkg_n - 1;
+    if (idx != last)
+        memcpy(exempt_pkgs[idx], exempt_pkgs[last], EXEMPT_PKG_NAME_LEN);
+    exempt_pkgs[last][0] = '\0';
+    exempt_pkg_n--;
+    klog("[root_hide] exempt_pkg_remove: '%s', total=%d", pkg, exempt_pkg_n);
+    return 0;
+}
+
+void root_exempt_pkg_clear(void)
+{
+    for (int i = 0; i < exempt_pkg_n; i++) exempt_pkgs[i][0] = '\0';
+    exempt_pkg_n = 0;
+    klog("[root_hide] exempt_pkg_clear");
+}
+
+void root_exempt_pkg_reset_defaults(void)
+{
+    root_exempt_pkg_clear();
+    for (int i = 0; exempt_pkg_defaults[i] != NULL; i++) {
+        if (exempt_pkg_n >= EXEMPT_PKG_MAX_COUNT) break;
+        const char *s = exempt_pkg_defaults[i];
+        if (!s || !s[0]) continue;
+        if (strlen(s) >= EXEMPT_PKG_NAME_LEN) continue;
+        strncpy(exempt_pkgs[exempt_pkg_n], s, EXEMPT_PKG_NAME_LEN - 1);
+        exempt_pkgs[exempt_pkg_n][EXEMPT_PKG_NAME_LEN - 1] = '\0';
+        exempt_pkg_n++;
+    }
+    klog("[root_hide] exempt_pkg_reset_defaults, total=%d", exempt_pkg_n);
+}
+
+int root_exempt_pkg_dump(char *buf, int buf_len)
+{
+    if (!buf || buf_len <= 0) return -1;
+    int offset = 0;
+    for (int i = 0; i < exempt_pkg_n && offset < buf_len - 1; i++) {
+        int n = snprintf(buf + offset, buf_len - offset, "%s\n", exempt_pkgs[i]);
+        if (n < 0 || n >= buf_len - offset) break;
+        offset += n;
+    }
+    if (offset == 0) buf[0] = '\0';
+    return offset;
+}
+
+/* 关键判定：基于 task->comm 前缀匹配豁免。
+ * 比较长度 = min(strlen(prefix), 15)，因为 task->comm 最多 15 字节。
+ *   - "me.bmax.apatch" (14B) vs comm "me.bmax.apatch" 整串相等 → 命中
+ *   - "com.example.dobbyproject" (24B) vs comm "com.example.dob" (15B)
+ *     比较前 15B → 完全相等 → 命中
+ *   - 普通 App 包名 (e.g. "com.tencent.mm") 与本表两条都不会前缀相等 → 不命中
+ */
+int is_root_exempt_pkg_comm(const char *comm)
+{
+    if (!comm || !comm[0]) return 0;
+    size_t clen = 0;
+    while (clen < EXEMPT_PKG_CMP_LEN && comm[clen]) clen++;
+    if (clen == 0) return 0;
+    for (int i = 0; i < exempt_pkg_n; i++) {
+        size_t plen = strlen(exempt_pkgs[i]);
+        size_t cmp  = plen < EXEMPT_PKG_CMP_LEN ? plen : EXEMPT_PKG_CMP_LEN;
+        if (clen < cmp) continue;
+        if (memcmp(comm, exempt_pkgs[i], cmp) == 0) return 1;
+    }
+    return 0;
 }

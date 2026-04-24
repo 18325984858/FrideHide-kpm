@@ -75,4 +75,31 @@ int  root_exempt_uid_count(void);
 int  is_root_exempt_uid(int uid);                       /* 0=否, 1=是 */
 int  root_exempt_uid_dump(char *buf, int buf_len);
 
+/* ──────────── 包名前缀豁免（基于 task->comm 前缀匹配） ────────────
+ * 用途：解决 "root_hide 一开 APatch / game 就启动不了" 的鸡生蛋。
+ *   APatch 和 game 被 zygote fork 后 task->comm 会被 set_task_comm
+ *   设为包名前 15 字节（TASK_COMM_LEN=16）。
+ *   只要在 hook 入口读 current->comm 与本表前缀匹配，就直接放行，
+ *   完全不依赖应用层注册（避免：root_hide 自伤 su → game 拿不到
+ *   superkey → add_exempt_self 永远不发的死循环）。
+ *
+ *   默认仅包含两条（其它 App 仍受 root_hide 限制）：
+ *     - "me.bmax.apatch"             APatch 管理器
+ *     - "com.example.dobbyproject"   本 game
+ *
+ *   匹配方式：min(strlen(prefix), 15) 字节 memcmp，"前缀必须完整命中"，
+ *   不会误伤其它包名。
+ */
+#define EXEMPT_PKG_MAX_COUNT 16
+#define EXEMPT_PKG_NAME_LEN  64
+
+int  root_exempt_pkg_add(const char *pkg);
+int  root_exempt_pkg_remove(const char *pkg);
+void root_exempt_pkg_clear(void);
+void root_exempt_pkg_reset_defaults(void);
+int  root_exempt_pkg_count(void);
+int  root_exempt_pkg_dump(char *buf, int buf_len);
+/* 由 FridHide is_trusted_caller() 调用：传入当前 task 的 comm */
+int  is_root_exempt_pkg_comm(const char *comm);
+
 #endif /* ROOT_HIDE_H */

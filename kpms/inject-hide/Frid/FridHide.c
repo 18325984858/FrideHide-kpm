@@ -42,7 +42,7 @@ int faccessat_hook_status = 0;
 int getdents64_hook_status = 0;
 void *show_smap_vma = 0;
 int file_hide_enabled = 0;
-int proc_hide_enabled = 0;
+int proc_hide_enabled = 1;  // PID 级隐藏总开关，默认开启（隐藏 PID 列表为空时不会拦截任何 /proc 访问）
 int comm_hide_enabled = 1;  // 线程名隐藏总开关，默认开启
 // ─────────────────────────────────────────────────────────────
 //  系统进程豁免（sys_exempt）
@@ -598,6 +598,10 @@ static int current_pid_tgid(int *opid, int *otgid)
 //      等开发链路被误拦。
 //   4. UID 在 RootHide exempt 名单中（自家 App 自我豁免，避免被
 //      自己注入的 168 个 root 关键字误伤）。
+//   5. task->comm 命中 RootHide 包名豁免（默认 me.bmax.apatch /
+//      com.example.dobbyproject）。这是"零依赖应用层注册"的兜底，
+//      解决 root_hide 启用后 popen-su 自伤导致 add_exempt_self
+//      永远不发的死循环。
 // 命中则 hook 放行，保证 mem_reader 端 & 系统管理链路工作不受影响。
 static int is_trusted_caller(void)
 {
@@ -608,6 +612,13 @@ static int is_trusted_caller(void)
     int pid = 0, tgid = 0;
     if (current_pid_tgid(&pid, &tgid) == 0) {
         if (is_hidden_pid(pid) || is_hidden_pid(tgid)) return 1;
+    }
+    /* 包名前缀豁免：通过 __get_task_comm 安全读取 current->comm。
+     * __get_task_comm 在 install 时已通过 kallsyms 解析；为空时跳过。 */
+    if (__get_task_comm) {
+        char comm[16] = {0};
+        __get_task_comm(comm, sizeof(comm), current);
+        if (is_root_exempt_pkg_comm(comm)) return 1;
     }
     return 0;
 }

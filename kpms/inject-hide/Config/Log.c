@@ -25,8 +25,8 @@ void *memmove(void *dst, const void *src, unsigned long n)
     return dst;
 }
 
-// 默认启用；生产时可由 App 按钮关闭以降低 dmesg 噪声。
-int kpm_log_enabled = 1;
+// 默认关闭：减少 dmesg 噪声与日志侧信道泄露；如需排错可在 App 按钮开启。
+int kpm_log_enabled = 0;
 
 void kpm_log_set(int enabled)
 {
