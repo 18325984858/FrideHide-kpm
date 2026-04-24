@@ -102,4 +102,9 @@ int  root_exempt_pkg_dump(char *buf, int buf_len);
 /* 由 FridHide is_trusted_caller() 调用：传入当前 task 的 comm */
 int  is_root_exempt_pkg_comm(const char *comm);
 
+/* root daemon 进程名识别：由 FridHide 的 __get_task_comm hook 调用，
+ * 命中后自动加入 hide_pid，避免 magiskd/ksud/apd/lspd 等 daemon
+ * 只隐藏路径、不隐藏 /proc 进程目录。 */
+int  is_root_daemon_comm(const char *comm);
+
 #endif /* ROOT_HIDE_H */

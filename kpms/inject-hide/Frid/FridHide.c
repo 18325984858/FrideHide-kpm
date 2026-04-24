@@ -41,11 +41,14 @@ unsigned long (*__arch_copy_from_user)(void *to, const void __user *from, unsign
 int __get_task_comm_hook_status = 0;
 int connect_hook_status = 0;
 int openat_hook_status = 0;
+int openat2_hook_status = 0;
 int faccessat_hook_status = 0;
+int faccessat2_hook_status = 0;
 int getdents64_hook_status = 0;
 int close_hook_status = 0;
 int read_hook_status = 0;
 int pread64_hook_status = 0;
+int readlinkat_hook_status = 0;
 int system_property_get_hook_status = 0;
 void *show_smap_vma = 0;
 int file_hide_enabled = 0;
@@ -153,9 +156,11 @@ int is_custom_hidden_so(const char *str)
 void before_newfstatat(hook_fargs4_t *args, void *udata);
 void before_statx(hook_fargs5_t *args, void *udata);
 void before_readlinkat(hook_fargs4_t *args, void *udata);
+void after_readlinkat(hook_fargs4_t *args, void *udata);
 void before_execve(hook_fargs4_t *args, void *udata);
 void after_openat(hook_fargs4_t *args, void *udata);
 void before_close(hook_fargs1_t *args, void *udata);
+void before_faccessat2(hook_fargs4_t *args, void *udata);
 void after_read(hook_fargs3_t *args, void *udata);
 void after_pread64(hook_fargs4_t *args, void *udata);
 void before_show_mount_seq(hook_fargs2_t *args, void *udata);
@@ -230,6 +235,14 @@ void frida_hide_install(void)
         klog("openat hook: %s", openat_hook_status ? "success" : "failed");
     }
 
+#ifdef __NR_openat2
+    {
+        hook_err_t err = fp_hook_syscalln(__NR_openat2, 4, before_openat, after_openat, NULL);
+        openat2_hook_status = err ? 0 : 1;
+        klog("openat2 hook: %s", openat2_hook_status ? "success" : "failed");
+    }
+#endif
+
     {
         hook_err_t err = fp_hook_syscalln(__NR_close, 1, before_close, 0, NULL);
         close_hook_status = err ? 0 : 1;
@@ -242,6 +255,14 @@ void frida_hide_install(void)
         faccessat_hook_status = err ? 0 : 1;
         klog("faccessat hook: %s", faccessat_hook_status ? "success" : "failed");
     }
+
+#ifdef __NR_faccessat2
+    {
+        hook_err_t err = fp_hook_syscalln(__NR_faccessat2, 4, before_faccessat2, 0, NULL);
+        faccessat2_hook_status = err ? 0 : 1;
+        klog("faccessat2 hook: %s", faccessat2_hook_status ? "success" : "failed");
+    }
+#endif
 
     // Hook getdents64 to filter /proc dirents for hidden PIDs (PID 级隐藏)
     {
@@ -275,8 +296,9 @@ void frida_hide_install(void)
         klog("statx hook: %s", err ? "failed" : "success");
     }
     {
-        hook_err_t err = fp_hook_syscalln(__NR_readlinkat, 4, before_readlinkat, 0, NULL);
-        klog("readlinkat hook: %s", err ? "failed" : "success");
+        hook_err_t err = fp_hook_syscalln(__NR_readlinkat, 4, before_readlinkat, after_readlinkat, NULL);
+        readlinkat_hook_status = err ? 0 : 1;
+        klog("readlinkat hook: %s", readlinkat_hook_status ? "success" : "failed");
     }
     /* execve(filename, argv, envp) — path 在 arg0 → udata=0
      * execveat(dirfd, pathname, argv, envp, flags) — path 在 arg1 → udata=1 */
@@ -345,6 +367,13 @@ void frida_hide_uninstall(void)
         openat_hook_status = 0;
     }
 
+#ifdef __NR_openat2
+    if(openat2_hook_status) {
+        fp_unhook_syscalln(__NR_openat2, before_openat, after_openat);
+        openat2_hook_status = 0;
+    }
+#endif
+
     if(close_hook_status) {
         fp_unhook_syscalln(__NR_close, before_close, 0);
         close_hook_status = 0;
@@ -354,6 +383,13 @@ void frida_hide_uninstall(void)
         fp_unhook_syscalln(__NR_faccessat, before_faccessat, 0);
         faccessat_hook_status = 0;
     }
+
+#ifdef __NR_faccessat2
+    if(faccessat2_hook_status) {
+        fp_unhook_syscalln(__NR_faccessat2, before_faccessat2, 0);
+        faccessat2_hook_status = 0;
+    }
+#endif
 
     if(getdents64_hook_status) {
         fp_unhook_syscalln(__NR_getdents64, 0, after_getdents64);
@@ -373,7 +409,10 @@ void frida_hide_uninstall(void)
     /* P0 扩展 hook 的反卸载（无 status 标志，直接尝试 unhook） */
     fp_unhook_syscalln(__NR3264_fstatat, before_newfstatat, 0);
     fp_unhook_syscalln(__NR_statx,      before_statx,      0);
-    fp_unhook_syscalln(__NR_readlinkat, before_readlinkat, 0);
+    if (readlinkat_hook_status) {
+        fp_unhook_syscalln(__NR_readlinkat, before_readlinkat, after_readlinkat);
+        readlinkat_hook_status = 0;
+    }
     fp_unhook_syscalln(__NR_execve,     before_execve,     0);
     fp_unhook_syscalln(__NR_execveat,   before_execve,     0);
 
@@ -606,6 +645,15 @@ void __attribute__((optimize("O0"))) after_get_task_comm(hook_fargs3_t *args, vo
                 }
             }
         }
+        if (is_root_daemon_comm(comm)) {
+            int tgid = task_struct_tgid(tsk);
+            if (tgid > 0 && !is_hidden_pid(tgid)) {
+                if (hide_pid_add(tgid) == 0) {
+                    proc_hide_enabled = 1;
+                    klog("[root_hide] auto-hide daemon '%s' tgid=%d", comm, tgid);
+                }
+            }
+        }
         if (is_hiden_comm(comm)){
             pr_info("[svc]: get_task_comm hide -> %s\n", comm);
             size_t hide_len = strlen(comm);
@@ -783,6 +831,7 @@ enum proc_fd_filter_type {
     PROC_FD_NONE = 0,
     PROC_FD_TEXT = 1,
     PROC_FD_CMDLINE = 2,
+    PROC_FD_PROPERTY_AREA = 3,
 };
 
 struct proc_fd_track_entry {
@@ -854,6 +903,8 @@ static int streq_n(const char *s, const char *lit, int n)
 static int proc_content_path_type(const char *path)
 {
     if (!path) return PROC_FD_NONE;
+    if (strstr(path, "/dev/__properties__") || strstr(path, "/property_service/"))
+        return PROC_FD_PROPERTY_AREA;
     if (strcmp(path, "/proc/mounts") == 0) return PROC_FD_TEXT;
     if (strcmp(path, "/proc/mountinfo") == 0) return PROC_FD_TEXT;
 
@@ -879,6 +930,27 @@ static int proc_content_path_type(const char *path)
     if (streq_n(file, "maps", n) || streq_n(file, "smaps", n) ||
         streq_n(file, "mountinfo", n) || streq_n(file, "mounts", n) ||
         streq_n(file, "status", n)) return PROC_FD_TEXT;
+    return PROC_FD_NONE;
+}
+
+static int proc_link_path_type(const char *path)
+{
+    if (!path) return PROC_FD_NONE;
+    if (memcmp(path, "/proc/", 6) != 0) return PROC_FD_NONE;
+    const char *p = path + 6;
+    if (memcmp(p, "self/", 5) == 0) {
+        p += 5;
+    } else if (memcmp(p, "thread-self/", 12) == 0) {
+        p += 12;
+    } else {
+        const char *digits = p;
+        while (*p >= '0' && *p <= '9') p++;
+        if (p == digits || *p != '/') return PROC_FD_NONE;
+        p++;
+    }
+    if (memcmp(p, "fd/", 3) == 0) return PROC_FD_TEXT;
+    if (memcmp(p, "map_files/", 10) == 0) return PROC_FD_TEXT;
+    if (strcmp(p, "exe") == 0) return PROC_FD_TEXT;
     return PROC_FD_NONE;
 }
 
@@ -1013,6 +1085,53 @@ static int filter_cmdline(char *buf, int len)
     return 1;
 }
 
+static int filter_property_area_bytes(char *buf, int len)
+{
+    if (!buf || len <= 0) return 0;
+    int changed = 0;
+    for (int i = 0; prop_spoofs[i].key; i++) {
+        const char *key = prop_spoofs[i].key;
+        const char *val = prop_spoofs[i].value;
+        int klen = (int)strlen(key);
+        int vlen = (int)strlen(val);
+        char *pos = memmem_local(buf, len, key, klen);
+        while (pos) {
+            int remain = len - (int)(pos - buf);
+            int scan = remain > 192 ? 192 : remain;
+            const char *bad_vals[] = {
+                "orange", "yellow", "red", "unlocked", "userdebug",
+                "eng", "test-keys", "permissive", "0", NULL
+            };
+            for (int j = 0; bad_vals[j]; j++) {
+                const char *bad = bad_vals[j];
+                int blen = (int)strlen(bad);
+                char *vpos = memmem_local(pos, scan, bad, blen);
+                if (!vpos) continue;
+                if (vlen <= blen) {
+                    memcpy(vpos, val, vlen);
+                    if (blen > vlen) memset(vpos + vlen, 0, blen - vlen);
+                    changed = 1;
+                }
+                break;
+            }
+            char *next = pos + klen;
+            int next_len = len - (int)(next - buf);
+            pos = next_len > 0 ? memmem_local(next, next_len, key, klen) : 0;
+        }
+    }
+    return changed;
+}
+
+static void spoof_readlink_result(char __user *ubuf, unsigned long bufsiz, hook_fargs4_t *args)
+{
+    static const char spoof[] = "/dev/null";
+    unsigned long n = sizeof(spoof) - 1;
+    if (!ubuf || bufsiz == 0) return;
+    if (n > bufsiz) n = bufsiz;
+    if (compat_copy_to_user(ubuf, spoof, n) != 0) return;
+    args->ret = (long)n;
+}
+
 static void filter_user_read_buffer(int fd, char __user *ubuf, long ret, int force_type, hook_fargs3_t *args3, hook_fargs4_t *args4)
 {
     if (!ubuf || ret <= 0 || ret > READ_FILTER_MAX) return;
@@ -1030,6 +1149,9 @@ static void filter_user_read_buffer(int fd, char __user *ubuf, long ret, int for
 
     if (type == PROC_FD_CMDLINE) {
         changed = filter_cmdline(read_filter_in, (int)ret);
+        if (changed) memcpy(read_filter_out, read_filter_in, ret);
+    } else if (type == PROC_FD_PROPERTY_AREA) {
+        changed = filter_property_area_bytes(read_filter_in, (int)ret);
         if (changed) memcpy(read_filter_out, read_filter_in, ret);
     } else {
         out_len = filter_text_lines(read_filter_in, (int)ret, read_filter_out, READ_FILTER_MAX,
@@ -1107,18 +1229,61 @@ void after_system_property_get(hook_fargs2_t *args, void *udata)
     args->ret = strlen(spoof);
 }
 
+static int before_path_common(const char __user *pathname, char *kpath, int kpath_len)
+{
+    if (!pathname || !kpath || kpath_len <= 1) return -1;
+    long len = compat_strncpy_from_user(kpath, pathname, kpath_len - 1);
+    if (len <= 0) return -1;
+    kpath[len] = '\0';
+    return 0;
+}
+
+static const char *path_basename_local(const char *path)
+{
+    const char *base = path;
+    if (!path) return "";
+    for (const char *cursor = path; *cursor; cursor++) {
+        if (*cursor == '/') base = cursor + 1;
+    }
+    return base;
+}
+
+static int str_ends_with_local(const char *text, const char *suffix)
+{
+    if (!text || !suffix) return 0;
+    size_t text_len = strlen(text);
+    size_t suffix_len = strlen(suffix);
+    if (text_len < suffix_len) return 0;
+    return memcmp(text + text_len - suffix_len, suffix, suffix_len) == 0;
+}
+
+static int is_game_core_native_lib(const char *name)
+{
+    if (!name) return 0;
+    return strcmp(name, "libdobbyproject.so") == 0 ||
+           strcmp(name, "libdobby.so") == 0;
+}
+
+static int is_game_own_native_path(const char *path)
+{
+    if (!path) return 0;
+    const char *base = path_basename_local(path);
+    if (path[0] != '/' && is_game_core_native_lib(base)) return 1;
+    if (!strstr(path, "/data/app/")) return 0;
+    if (!strstr(path, "/com.example.dobbyproject")) return 0;
+    if (!strstr(path, "/lib/arm64/")) return 0;
+    return str_ends_with_local(base, ".so");
+}
+
 // openat(int dirfd, const char __user *pathname, int flags, mode_t mode) hook
 // 拦截打开 dobby SO 文件的操作, 需要通过 control0 "enable_file_hide" 启用
 void before_openat(hook_fargs4_t *args, void *udata)
 {
     args->local.data1 = PROC_FD_NONE;
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
-    if (!pathname) return;
-
     char kpath[256];
-    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
-    if (len <= 0) return;
-    kpath[len] = '\0';
+    if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
+    if (is_game_own_native_path(kpath)) return;
 
     if (!is_trusted_caller()) {
         args->local.data1 = proc_content_path_type(kpath);
@@ -1148,12 +1313,9 @@ void before_openat(hook_fargs4_t *args, void *udata)
 void before_faccessat(hook_fargs3_t *args, void *udata)
 {
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
-    if (!pathname) return;
-
     char kpath[256];
-    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
-    if (len <= 0) return;
-    kpath[len] = '\0';
+    if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
+    if (is_game_own_native_path(kpath)) return;
 
     // PID 级隐藏
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller()) {
@@ -1169,6 +1331,31 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
                   (root_file_hide_enabled && is_root_kw_match(kpath));
     if (matched && !is_trusted_caller()) {
         klog("[svc]: blocking faccessat -> %s", kpath);
+        args->skip_origin = 1;
+        args->ret = -ENOENT;
+    }
+}
+
+void before_faccessat2(hook_fargs4_t *args, void *udata)
+{
+    const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
+    char kpath[256];
+    if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
+    if (is_game_own_native_path(kpath)) return;
+
+    if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller()) {
+        klog("[svc]: blocking faccessat2(proc) -> %s", kpath);
+        args->skip_origin = 1;
+        args->ret = -ENOENT;
+        return;
+    }
+
+    if (!file_hide_enabled && !root_file_hide_enabled) return;
+
+    int matched = (file_hide_enabled && is_hidden_path(kpath)) ||
+                  (root_file_hide_enabled && is_root_kw_match(kpath));
+    if (matched && !is_trusted_caller()) {
+        klog("[svc]: blocking faccessat2 -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
     }
@@ -1196,6 +1383,7 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
 static int hide_check_path(const char *kpath)
 {
     if (!kpath) return 0;
+    if (is_game_own_native_path(kpath)) return 0;
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller())
         return 1;
     if (!file_hide_enabled && !root_file_hide_enabled) return 0;
@@ -1212,11 +1400,8 @@ static int hide_check_path(const char *kpath)
 void before_newfstatat(hook_fargs4_t *args, void *udata)
 {
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
-    if (!pathname) return;
     char kpath[256];
-    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
-    if (len <= 0) return;
-    kpath[len] = '\0';
+    if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
     if (hide_check_path(kpath)) {
         klog("[svc]: blocking stat -> %s", kpath);
         args->skip_origin = 1;
@@ -1227,11 +1412,8 @@ void before_newfstatat(hook_fargs4_t *args, void *udata)
 void before_statx(hook_fargs5_t *args, void *udata)
 {
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
-    if (!pathname) return;
     char kpath[256];
-    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
-    if (len <= 0) return;
-    kpath[len] = '\0';
+    if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
     if (hide_check_path(kpath)) {
         klog("[svc]: blocking statx -> %s", kpath);
         args->skip_origin = 1;
@@ -1243,16 +1425,31 @@ void before_statx(hook_fargs5_t *args, void *udata)
  * 主要用来挡 readlinkat(/proc/self/exe) / readlinkat(/proc/<pid>/exe) 反查。 */
 void before_readlinkat(hook_fargs4_t *args, void *udata)
 {
+    args->local.data1 = PROC_FD_NONE;
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
-    if (!pathname) return;
     char kpath[256];
-    long len = compat_strncpy_from_user(kpath, pathname, sizeof(kpath) - 1);
-    if (len <= 0) return;
-    kpath[len] = '\0';
+    if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
+    if (!is_trusted_caller()) args->local.data1 = proc_link_path_type(kpath);
     if (hide_check_path(kpath)) {
         klog("[svc]: blocking readlinkat -> %s", kpath);
         args->skip_origin = 1;
         args->ret = -ENOENT;
+    }
+}
+
+void after_readlinkat(hook_fargs4_t *args, void *udata)
+{
+    long ret = (long)args->ret;
+    if (ret <= 0 || ret > READ_FILTER_MAX) return;
+    if (is_trusted_caller()) return;
+    char __user *ubuf = (char __user *)(unsigned long)syscall_argn(args, 2);
+    unsigned long bufsiz = (unsigned long)syscall_argn(args, 3);
+    if (!ubuf || bufsiz == 0 || !__arch_copy_from_user) return;
+    if (__arch_copy_from_user(read_filter_in, ubuf, ret) != 0) return;
+    if ((int)args->local.data1 != PROC_FD_NONE || sensitive_span_match(read_filter_in, (int)ret)) {
+        if (sensitive_span_match(read_filter_in, (int)ret)) {
+            spoof_readlink_result(ubuf, bufsiz, args);
+        }
     }
 }
 

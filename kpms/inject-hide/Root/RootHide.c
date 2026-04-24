@@ -631,3 +631,40 @@ int is_root_exempt_pkg_comm(const char *comm)
     }
     return 0;
 }
+
+static const char *const root_daemon_comm_defaults[] = {
+    "magiskd",
+    "magisk",
+    "ksud",
+    "kernelsu",
+    "apd",
+    "apatchd",
+    "kpatchd",
+    "kpmd",
+    "lspd",
+    "zygiskd",
+    "zygisk",
+    "shamiko",
+    "tricky_store",
+    "daemonsu",
+    "supersu",
+    "su",
+    NULL,
+};
+
+int is_root_daemon_comm(const char *comm)
+{
+    if (!comm || !comm[0] || !root_hide_enabled) return 0;
+    size_t clen = 0;
+    while (clen < EXEMPT_PKG_CMP_LEN && comm[clen]) clen++;
+    if (clen == 0) return 0;
+    for (int i = 0; root_daemon_comm_defaults[i] != NULL; i++) {
+        const char *kw = root_daemon_comm_defaults[i];
+        size_t klen = strlen(kw);
+        if (klen == 0) continue;
+        if (klen == clen && memcmp(comm, kw, klen) == 0) return 1;
+        if (klen < 5) continue;
+        if (klen < clen && root_memmem(comm, clen, kw, klen)) return 1;
+    }
+    return 0;
+}
