@@ -1275,6 +1275,29 @@ static int is_game_own_native_path(const char *path)
     return str_ends_with_local(base, ".so");
 }
 
+/*
+ * dobbyproject 自家应用目录全豁免
+ *
+ * 原因：zygote 在 fork app 进程后、JNI_OnLoad 之前会读 APK 资源 + linker
+ * 加载 SO，会涉及多种路径（.apk / lib/arm64 目录 / split_*.apk / base.apk!/...
+ * zip 内路径 / data/user_de/<pkg>/cache/...）。这些都属于 dobbyproject
+ * 自家应用，统一只要路径里含 "/com.example.dobbyproject" 就放行；
+ * 不会泄露其它信息（只豁免自家应用目录里的 hide_so 命中）。
+ *
+ * 也覆盖：
+ *   /data/app/~~xxx/com.example.dobbyproject-yyy/   (APK + lib + split)
+ *   /data/data/com.example.dobbyproject/             (内部数据)
+ *   /data/user/0/com.example.dobbyproject/           (multi-user 数据)
+ *   /data/user_de/0/com.example.dobbyproject/        (Direct Boot 数据)
+ *   /storage/emulated/0/Android/data/com.example.dobbyproject/  (外部数据)
+ */
+static int is_game_own_apk_path(const char *path)
+{
+    if (!path) return 0;
+    if (strstr(path, "/com.example.dobbyproject")) return 1;
+    return 0;
+}
+
 static int readlink_result_is_game_own_native_path(const char *buf, long len)
 {
     if (!buf || len <= 0) return 0;
@@ -1300,7 +1323,7 @@ void before_openat(hook_fargs4_t *args, void *udata)
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
     char kpath[256];
     if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
-    if (is_game_own_native_path(kpath)) return;
+    if (is_game_own_native_path(kpath) || is_game_own_apk_path(kpath)) return;
 
     if (!is_trusted_caller()) {
         args->local.data1 = proc_content_path_type(kpath);
@@ -1332,7 +1355,7 @@ void before_faccessat(hook_fargs3_t *args, void *udata)
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
     char kpath[256];
     if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
-    if (is_game_own_native_path(kpath)) return;
+    if (is_game_own_native_path(kpath) || is_game_own_apk_path(kpath)) return;
 
     // PID 级隐藏
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller()) {
@@ -1358,7 +1381,7 @@ void before_faccessat2(hook_fargs4_t *args, void *udata)
     const char __user *pathname = (const char __user *)(unsigned long)syscall_argn(args, 1);
     char kpath[256];
     if (before_path_common(pathname, kpath, sizeof(kpath)) != 0) return;
-    if (is_game_own_native_path(kpath)) return;
+    if (is_game_own_native_path(kpath) || is_game_own_apk_path(kpath)) return;
 
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller()) {
         klog("[svc]: blocking faccessat2(proc) -> %s", kpath);
@@ -1400,7 +1423,7 @@ void before_faccessat2(hook_fargs4_t *args, void *udata)
 static int hide_check_path(const char *kpath)
 {
     if (!kpath) return 0;
-    if (is_game_own_native_path(kpath)) return 0;
+    if (is_game_own_native_path(kpath) || is_game_own_apk_path(kpath)) return 0;
     if (proc_hide_enabled && is_hidden_proc_path(kpath) && !is_trusted_caller())
         return 1;
     if (!file_hide_enabled && !root_file_hide_enabled) return 0;
