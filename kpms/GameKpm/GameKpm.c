@@ -78,7 +78,7 @@ static long game_kpm_init(const char *args, const char *event, void *__user rese
     /* 2. IPC 桥（即使 kpm-svc 没加载，这里只打日志，不退出） */
     delegate_init();
 
-    /* 3. 安装 hook（默认全部不启用，等 control0 触发） */
+    /* 3. 安装 hook（hook 链已挂上，等开关启用） */
     anti_debug_install();
     anti_mem_install();
     anti_exec_install();
@@ -86,7 +86,23 @@ static long game_kpm_init(const char *args, const char *event, void *__user rese
     anti_private_dir_install();
     status_filter_install();
 
-    glog_always("installed");
+    /* 4. 默认开启所有反检测开关（log 除外，避免 dmesg 噪声）。
+       未注册 target 时 is_target_current() 返回 0，所有 hook 透传，
+       开开关纯粹是预设态，等用户态 add_target_pid 即生效。 */
+    anti_debug_set_ptrace(1);
+    anti_debug_set_prctl(1);
+    anti_debug_set_pts(1);
+    anti_mem_set_mincore(1);
+    anti_exec_set_block(1);
+    anti_exec_set_inotify(1);
+    anti_env_set_uname(1);
+    status_filter_set(1);
+    /* private_dir_watch 默认开启用于初次研究 — 不影响功能，仅日志噪声。
+       如不需要可 disable_private_dir_watch */
+    anti_private_dir_set(1);
+    /* gk_log 默认 0，需手动 enable_log 才输出 hook 命中日志 */
+
+    glog_always("installed (all anti-detect switches default ON, log default OFF)");
     return 0;
 }
 
