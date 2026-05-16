@@ -991,6 +991,15 @@ static const struct prop_spoof_item prop_spoofs[] = {
     {"ro.build.type", "user"},
     {"ro.build.tags", "release-keys"},
     {"ro.boot.selinux", "enforcing"},
+    /* reveny Native Root Detector v7.7.0 “Bootloader Unlocked”
+     * 第 2 条规则读 sys.oem_unlock_allowed。锁定设备上该属性
+     * 通常不存在，读到任何值（包括 "0"）都会被它判定为 unlocked。
+     * 改写为空字符串后，__system_property_get 返回长度 0，
+     * 等价于属性不存在，绕过该条检测。 */
+    {"sys.oem_unlock_allowed", ""},
+    {"ro.oem_unlock_supported", "0"},
+    {"ro.boot.realmebootstate", "green"},
+    {"ro.boot.hwc", "GLOBAL"},
     {0, 0},
 };
 

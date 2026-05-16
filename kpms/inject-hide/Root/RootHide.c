@@ -13,10 +13,18 @@
  *   /data/adb/lsposed*, shamiko, zygisk, dobby, tricky 等
  *
  * 局限性（需要其他手段配合）
- *   - /proc/self/mounts、/proc/self/mountinfo 内容过滤需要 read hook
- *     （本模块未实现，建议结合 resetprop + APM systemless 卸载）；
- *   - getprop 伪装（ro.boot.verifiedbootstate 等）需要 APM 模块在
- *     post-fs-data.sh 用 resetprop 完成；
+ *   - /proc/self/mounts、/proc/self/mountinfo 内容过滤已经由 FridHide
+ *     show_mountinfo / show_vfsmnt hook + sensitive_span_match 完成，
+ *     默认会丢掉命中 root_kw[] 的行（含本文件新增的 "/debug_ramdisk"）；
+ *   - getprop 伪装在 __system_property_get hook 中处理 prop_spoofs[]，
+ *     已覆盖 ro.boot.verifiedbootstate / sys.oem_unlock_allowed 等；
+ *     若目标进程走 __system_property_find + __system_property_read_callback
+ *     的 mmap 路径（reveny Native Root Detector v7.7.0 即如此），
+ *     纯内核侧 hook 可能落空，需配合 resetprop / Tricky Store；
+ *   - PackageManager 经由 Binder IPC 从 system_server 取已安装包列表
+ *     （Detected Risky App: me.bmax.apatch 即走此路径），KPM 仅靠
+ *     文件/读缓冲 hook 无法过滤；需要在 system_server 或目标 App
+ *     的 Zygisk/LSPosed 模块中做用户态过滤；
  *   - 硬件 Key Attestation 必须 Tricky Store + keybox。
  */
 #include "RootHide.h"
@@ -73,6 +81,16 @@ static const char *const root_kw_defaults[] = {
     "/cache/magisk.log",
     "/data/magisk",
     "/debug_ramdisk/.magisk",
+    /* /debug_ramdisk 在 Android 13+ user 构建上不应存在；
+     * Magisk/APatch 利用它做 systemless 注入。reveny Native
+     * Root Detector v7.7.0 的 CheckMounts() 直接枚举 mountinfo，
+     * 命中 /debug_ramdisk 或 /debug_ramdisk/pts 即报
+     * “Detected Inconsistent Mount”。把整段路径作为子串关键字
+     * 加入即可让 show_mountinfo/show_vfsmnt hook 在内核侧整行
+     * 丢弃。注意：不要写成 "debug_ramdisk" 裸串，避免命中其他
+     * 含该子串的合法用户路径；要求至少前缀 / 才能精准命中
+     * mountinfo 第 5 列（mount point）。 */
+    "/debug_ramdisk",
     "/init.magisk.rc",
     "/mnt/vendor/persist/magisk",
     "kitsune",              /* Magisk Kitsune */
