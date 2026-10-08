@@ -1,4 +1,4 @@
-# FrideHide-kpm
+# Game-kpm
 
 > 基于 [KernelPatch](https://github.com/bmax121/KernelPatch)（上游 v0.12.9）的 Android 内核态隐藏 / 反检测 KPM 集合。
 > 当前包含两个生产模块：**inject-hide**（通用隐藏） + **GameKpm**（游戏反作弊穿透）。
